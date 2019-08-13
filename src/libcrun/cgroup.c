@@ -346,8 +346,10 @@ enter_cgroup (int cgroup_mode, pid_t pid, const char *path, int ensure_missing, 
         }
 
       xasprintf (&cgroup_path_procs, "/sys/fs/cgroup/%s/cgroup.procs", path);
-
-      return write_file (cgroup_path_procs, pid_str, strlen (pid_str), err);
+      ret = write_file (cgroup_path_procs, pid_str, strlen (pid_str), err);
+      if (UNLIKELY (ret < 0))
+        return ret;
+      return 0;
     }
 
   subsystems = libcrun_get_cgroups_subsystems (err);
