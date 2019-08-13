@@ -371,48 +371,16 @@ do_mount_cgroup_v2 (libcrun_container_t *container,
   if (cgroup_mode < 0)
     return cgroup_mode;
 
-  if (! has_new_cgroup_namespace (container))
+  ret = do_mount (container, "cgroup2", target, "cgroup2", mountflags, NULL, 1, err);
+  if (UNLIKELY (ret < 0))
     {
-      ret = do_mount (container, "cgroup2", target, "cgroup2", mountflags, NULL, 1, err);
-      if (UNLIKELY (ret < 0))
+      if (crun_error_get_errno (err) == EPERM || crun_error_get_errno (err) == EBUSY)
         {
-          if (crun_error_get_errno (err) == EPERM)
-            {
-              crun_error_release (err);
+          crun_error_release (err);
 
-              ret = do_mount (container, "/sys/fs/cgroup", target, "", MS_BIND | mountflags, "", 0, err);
-            }
-          return ret;
+          ret = do_mount (container, "/sys/fs/cgroup", target, "", MS_BIND | mountflags, "", 0, err);
         }
-    }
-  else
-    {
-      cleanup_free char *source_path = NULL;
-      cleanup_free char *content = NULL;
-      char *it;
-      size_t n;
-
-      ret = read_all_file ("/proc/self/cgroup", &content, &n, err);
-      if (UNLIKELY (ret < 0))
-        return ret;
-      if (n < 4)
-        return crun_make_error (err, -1, "invalid file /proc/self/cgroup");
-      content[n - 1] = '\0';  /* Drop the '\n' */
-
-      it = strstr (content + 3, "name=");
-      if (it != NULL)
-        it += 5;
-      else
-        it = content + 3;
-      xasprintf (&source_path, "/sys/fs/cgroup%s", it);
-
-      ret = mkdir (target, 0755);
-      if (UNLIKELY (ret < 0 && errno != EEXIST))
-        return crun_make_error (err, errno, "mkdir for '%s' failed", target);
-
-      ret = do_mount (container, source_path, target, "", MS_BIND | mountflags, "", 0, err);
-      if (UNLIKELY (ret < 0))
-        return ret;
+      return ret;
     }
 
   return 0;
