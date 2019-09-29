@@ -1591,31 +1591,20 @@ read_caps (unsigned long caps[2], char **values, size_t len, libcrun_error_t *er
 }
 
 int
-libcrun_set_selinux_exec_label (libcrun_container_t *container, libcrun_error_t *err)
+libcrun_set_selinux_exec_label (oci_container_process *proc, libcrun_error_t *err)
 {
-  char *label;
+  if (proc->selinux_label)
+    return set_selinux_exec_label (proc->selinux_label, err);
 
-  if (container->container_def->process == NULL)
-    return 0;
-
-  label = container->container_def->process->selinux_label;
-  if (label == NULL)
-    return 0;
-  return set_selinux_exec_label (label, err);
+  return 0;
 }
 
 int
-libcrun_set_apparmor_profile(libcrun_container_t *container, libcrun_error_t *err)
+libcrun_set_apparmor_profile (oci_container_process *proc, libcrun_error_t *err)
 {
-  char *profile;
-
-  if (container->container_def->process == NULL)
-    return 0;
-
-  profile = container->container_def->process->apparmor_profile;
-  if (profile == NULL)
-    return 0;
-  return set_apparmor_profile (profile, err);
+  if (proc->apparmor_profile)
+    return set_apparmor_profile (proc->apparmor_profile, err);
+  return 0;
 }
 
 int

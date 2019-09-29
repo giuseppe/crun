@@ -558,13 +558,16 @@ container_entrypoint_init (void *args, const char *notify_socket,
         }
     }
 
-  ret = libcrun_set_selinux_exec_label (container, err);
-  if (UNLIKELY (ret < 0))
-    return ret;
+  if (def->process)
+    {
+      ret = libcrun_set_selinux_exec_label (def->process, err);
+      if (UNLIKELY (ret < 0))
+        return ret;
 
-  ret = libcrun_set_apparmor_profile (container, err);
-  if (UNLIKELY (ret < 0))
-    return ret;
+      ret = libcrun_set_apparmor_profile (def->process, err);
+      if (UNLIKELY (ret < 0))
+        return ret;
+    }
 
   ret = libcrun_set_hostname (container, err);
   if (UNLIKELY (ret < 0))
@@ -1991,17 +1994,11 @@ libcrun_container_exec (libcrun_context_t *context, const char *id, oci_containe
             libcrun_warning ("cannot set HOME environment variable");
         }
 
-      if (process->selinux_label)
-        {
-          if (UNLIKELY (set_selinux_exec_label (process->selinux_label, err) < 0))
-            libcrun_fail_with_error ((*err)->status, "%s", (*err)->msg);
-        }
+      if (UNLIKELY (libcrun_set_selinux_exec_label (process, err) < 0))
+        libcrun_fail_with_error ((*err)->status, "%s", (*err)->msg);
 
-	  if (process->apparmor_profile)
-        {
-          if (UNLIKELY (set_apparmor_profile (process->apparmor_profile, err) < 0))
-            libcrun_fail_with_error ((*err)->status, "%s", (*err)->msg);
-        }
+      if (UNLIKELY (libcrun_set_apparmor_profile (process, err) < 0))
+        libcrun_fail_with_error ((*err)->status, "%s", (*err)->msg);
 
       if (container->container_def->linux && container->container_def->linux->seccomp)
         {
