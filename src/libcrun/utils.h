@@ -89,8 +89,6 @@ int add_selinux_mount_label (char **ret, const char *data, const char *label, li
 
 int set_apparmor_profile (const char *profile, libcrun_error_t *err);
 
-int is_apparmor_enabled(void);
-
 int read_all_fd (int fd, const char *description, char **out, size_t *len, libcrun_error_t *err);
 
 int read_all_file (const char *path, char **out, size_t *len, libcrun_error_t *err);
@@ -132,5 +130,9 @@ const char *find_executable (const char *executable_path);
 int copy_recursive_fd_to_fd (int srcfd, int destfd, const char *srcname, const char *destname, libcrun_error_t *err);
 
 int set_home_env (uid_t uid);
+
+int libcrun_initialize_selinux (libcrun_error_t *err);
+
+int libcrun_initialize_apparmor (libcrun_error_t *err);
 
 #endif
