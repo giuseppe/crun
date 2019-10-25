@@ -6,9 +6,9 @@ matrix:
   - env: TEST=coverity
   include:
     - arch: arm64
-      env: TEST=make
+      env: TEST=make-arm64
     - arch: amd64
-      env: TEST=make
+      env: TEST=make-amd64
     - arch: amd64
       env: TEST=podman
     - arch: amd64
@@ -18,7 +18,8 @@ matrix:
     - arch: amd64
       env: TEST=alpine-build
   matrix:
-  - TEST=make
+  - TEST=make-arm64
+  - TEST=make-amd64
   - TEST=podman
   - TEST=oci-validation
   - TEST=coverity
@@ -60,7 +61,8 @@ before_install:
 - git clone --depth=1 git://github.com/lloyd/yajl
 - "(cd yajl && ./configure -p /usr && make && sudo make install)"
 script:
-- if test $TEST = make; then ./autogen.sh && ./configure CFLAGS='-Wall -Werror' && make -j $(nproc) && make syntax-check; fi
+- if test $TEST = make-arm64; then ./autogen.sh && ./configure CFLAGS='-Wall -Werror' && make -j $(nproc) && make syntax-check; fi
+- if test $TEST = make-amd64; then ./autogen.sh && ./configure --disable-systemd CFLAGS='-Wall -Werror' && make -j $(nproc) && make syntax-check; fi
 - if test $TEST = podman; then sudo docker run --privileged --rm -v /sys/fs/cgroup:/sys/fs/cgroup:rw,rslave -v $(pwd):/crun crun-podman; fi
 - if test $TEST = oci-validation; then sudo docker run --privileged --rm -v /sys/fs/cgroup:/sys/fs/cgroup:rw,rslave -v $(pwd):/crun crun-oci-validation; fi
 - if test $TEST = coverity; then ./autogen.sh && eval "${COVERITY_SCAN_BUILD}"; fi

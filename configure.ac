@@ -19,35 +19,62 @@ AC_PROG_SED
 AC_PROG_CC
 AM_PATH_PYTHON
 
-AC_CHECK_HEADERS([sys/capability.h], [], [AC_MSG_ERROR([*** POSIX caps headers not found])])
 
 AC_CHECK_HEADERS([error.h])
 
 AC_CHECK_FUNCS(copy_file_range fgetxattr statx fgetpwent_r issetugid secure_getenv)
 
-AC_SEARCH_LIBS(cap_from_name, [cap], [AC_DEFINE([HAVE_CAP], 1, [Define if libcap is available])], [AC_MSG_ERROR([*** libcap headers not found])])
-AC_SEARCH_LIBS(seccomp_rule_add, [seccomp], [AC_DEFINE([HAVE_SECCOMP], 1, [Define if seccomp is available])], [AC_MSG_ERROR([*** libseccomp headers not found])])
-AC_SEARCH_LIBS(seccomp_arch_resolve_name, [seccomp], [AC_DEFINE([SECCOMP_ARCH_RESOLVE_NAME], 1, [Define if seccomp_arch_resolve_name is available])], [ ])
-AC_SEARCH_LIBS(sd_listen_fds, [systemd], [AC_DEFINE([HAVE_SYSTEMD], 1, [Define if libsystemd is available])], [ ])
-
-AC_DEFINE([HAVE_SELINUX], 1, [Define if SELinux is available])
-AC_DEFINE([HAVE_APPARMOR], 1, [Define if AppArmor is available])
-
-AC_SEARCH_LIBS(yajl_tree_get, [yajl], [AC_DEFINE([HAVE_YAJL], 1, [Define if libyajl is available])], [AC_MSG_ERROR([*** libyajl headers not found])])
-
-AC_CHECK_HEADERS([linux/bpf.h])
-AS_IF([test "$ac_cv_header_linux_bpf_h" = "yes"], [
-	AC_MSG_CHECKING(compilation for eBPF)
-	AC_COMPILE_IFELSE(
-		[AC_LANG_SOURCE([[
-			#include <linux/bpf.h>
-			int program = BPF_PROG_TYPE_CGROUP_DEVICE;
-		]])],
-		[AC_MSG_RESULT(yes)
-		 AC_DEFINE([HAVE_EBPF], 1, [Define if eBPF is available])],
-		[AC_MSG_RESULT(no)])
+dnl libcap
+AC_ARG_ENABLE([caps],
+	AS_HELP_STRING([--disable-caps], [Ignore libcap and disable support]))
+AS_IF([test "x$enable_caps" != "xno"], [
+	AC_CHECK_HEADERS([sys/capability.h], [], [AC_MSG_ERROR([*** POSIX caps headers not found])])
+	AS_IF([test "$ac_cv_header_sys_capability_h" = "yes"], [
+		AC_SEARCH_LIBS(cap_from_name, [cap], [AC_DEFINE([HAVE_CAP], 1, [Define if libcap is available])], [AC_MSG_ERROR([*** libcap headers not found])])
+	])
 ])
 
+dnl libseccomp
+AC_ARG_ENABLE([seccomp],
+	AS_HELP_STRING([--disable-seccomp], [Ignore libseccomp and disable support]))
+AS_IF([test "x$enable_seccomp" != "xno"], [
+	AC_CHECK_HEADERS([seccomp.h], [], [AC_MSG_ERROR([*** Missing libseccomp headers])])
+	AS_IF([test "$ac_cv_header_seccomp_h" = "yes"], [
+		AC_SEARCH_LIBS(seccomp_rule_add, [seccomp], [AC_DEFINE([HAVE_SECCOMP], 1, [Define if seccomp is available])], [AC_MSG_ERROR([*** libseccomp headers not found])])
+		AC_SEARCH_LIBS(seccomp_arch_resolve_name, [seccomp], [AC_DEFINE([SECCOMP_ARCH_RESOLVE_NAME], 1, [Define if seccomp_arch_resolve_name is available])], [ ])
+	])
+])
+
+dnl libsystemd
+AC_ARG_ENABLE([systemd],
+	AS_HELP_STRING([--disable-systemd], [Enable systemd support]))
+AS_IF([test "x$enable_systemd" != "xno"], [
+	AC_CHECK_HEADERS([systemd/sd-bus.h], [], [AC_MSG_ERROR([*** Missing libsystemd headers])])
+	AS_IF([test "$ac_cv_header_systemd_sd_bus_h" = "yes"], [
+		AC_SEARCH_LIBS(sd_listen_fds, [systemd], [AC_DEFINE([HAVE_SYSTEMD], 1, [Define if libsystemd is available])], [AC_MSG_ERROR([*** Failed to find libsystemd])])
+	])
+])
+
+dnl ebpf
+AC_ARG_ENABLE([bpf],
+	AS_HELP_STRING([--disable-bpf], [Ignore eBPF and disable support]))
+AS_IF([test "x$enable_bpf" != "xno"], [
+	AC_CHECK_HEADERS([linux/bpf.h])
+	AS_IF([test "$ac_cv_header_linux_bpf_h" = "yes"], [
+		AC_MSG_CHECKING(compilation for eBPF)
+		AC_COMPILE_IFELSE(
+			[AC_LANG_SOURCE([[
+				#include <linux/bpf.h>
+				int program = BPF_PROG_TYPE_CGROUP_DEVICE;
+			]])],
+			[AC_MSG_RESULT(yes)
+			 AC_DEFINE([HAVE_EBPF], 1, [Define if eBPF is available])],
+			[AC_MSG_RESULT(no)])
+	])
+])
+
+
+AC_SEARCH_LIBS(yajl_tree_get, [yajl], [AC_DEFINE([HAVE_YAJL], 1, [Define if libyajl is available])], [AC_MSG_ERROR([*** libyajl headers not found])])
 PKG_CHECK_MODULES([YAJL], [yajl >= 2.0.0])
 
 AC_ARG_WITH([python-bindings], AS_HELP_STRING([--with-python-bindings], [build the Python bindings]))

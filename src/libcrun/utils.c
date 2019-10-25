@@ -427,8 +427,6 @@ libcrun_initialize_apparmor (libcrun_error_t *err arg_unused)
   return apparmor_enabled;
 }
 
-#ifdef HAVE_SELINUX
-
 static int
 libcrun_is_selinux_enabled (libcrun_error_t *err)
 {
@@ -436,12 +434,10 @@ libcrun_is_selinux_enabled (libcrun_error_t *err)
     return crun_make_error (err, 0, "SELinux not initialized correctly");
   return selinux_enabled;
 }
-#endif
 
 int
 add_selinux_mount_label (char **retlabel, const char *data, const char *label, libcrun_error_t *err arg_unused)
 {
-#ifdef HAVE_SELINUX
   int ret;
 
   ret = libcrun_is_selinux_enabled (err);
@@ -456,7 +452,6 @@ add_selinux_mount_label (char **retlabel, const char *data, const char *label, l
         xasprintf (retlabel, "context=\"%s\"", label);
       return 0;
     }
-#endif
   *retlabel = xstrdup (data);
   return 0;
 
@@ -490,7 +485,6 @@ write_file_and_check_fs_type (const char *file, const char *data, size_t len, un
 int
 set_selinux_exec_label (const char *label, libcrun_error_t *err)
 {
-#ifdef HAVE_SELINUX
   int ret;
 
   ret = libcrun_is_selinux_enabled (err);
@@ -503,11 +497,9 @@ set_selinux_exec_label (const char *label, libcrun_error_t *err)
       if (UNLIKELY (ret < 0))
         return ret;
     }
-#endif
   return 0;
 }
 
-#ifdef HAVE_APPARMOR
 static int
 libcrun_is_apparmor_enabled (libcrun_error_t *err)
 {
@@ -515,12 +507,10 @@ libcrun_is_apparmor_enabled (libcrun_error_t *err)
     return crun_make_error (err, 0, "AppArmor not initialized correctly");
   return apparmor_enabled;
 }
-#endif
 
 int
 set_apparmor_profile (const char *profile, libcrun_error_t *err)
 {
-#ifdef HAVE_APPARMOR
   int ret;
 
   ret = libcrun_is_apparmor_enabled (err);
@@ -536,7 +526,6 @@ set_apparmor_profile (const char *profile, libcrun_error_t *err)
       if (UNLIKELY (ret < 0))
         return ret;
     }
-#endif
   return 0;
 }
 

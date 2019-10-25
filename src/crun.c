@@ -171,12 +171,8 @@ print_version (FILE *stream, struct argp_state *state arg_unused)
 #ifdef HAVE_SYSTEMD
   fprintf (stream, "+SYSTEMD ");
 #endif
-#ifdef HAVE_SELINUX
   fprintf (stream, "+SELINUX ");
-#endif
-#ifdef HAVE_APPARMOR
   fprintf (stream, "+APPARMOR ");
-#endif
 #ifdef HAVE_CAP
   fprintf (stream, "+CAP ");
 #endif
