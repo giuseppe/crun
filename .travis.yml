@@ -43,7 +43,7 @@ services:
 - docker
 language: c
 sudo: required
-dist: xenial
+dist: bionic
 addons:
   apt:
     packages:
