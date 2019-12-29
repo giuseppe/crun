@@ -142,5 +142,8 @@ char *secure_getenv (char const *name);
 
 const char *find_annotation (libcrun_container_t *container, const char *name);
 
+int get_file_type_at (int dirfd, mode_t *mode, bool nofollow, const char *path);
+
+int get_file_type (mode_t *mode, bool nofollow, const char *path);
 
 #endif

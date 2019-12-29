@@ -904,27 +904,10 @@ do_mounts (libcrun_container_t *container, const char *rootfs, libcrun_error_t *
       unsigned long flags = 0;
       unsigned long extra_flags = 0;
       int is_dir = 1;
-      char *resolved_path, buffer_resolved_path[PATH_MAX];
+      char *resolved_path = NULL, buffer_resolved_path[PATH_MAX];
       char *target = NULL;
       cleanup_close int copy_from_fd = -1;
-
-      resolved_path = chroot_realpath (rootfs, def->mounts[i]->destination, buffer_resolved_path);
-      if (resolved_path != NULL)
-        target = resolved_path;
-      else
-        {
-          if (errno != ENOENT)
-            return crun_make_error (err, errno, "cannot resolve %s", def->mounts[i]->destination);
-
-          resolved_path = def->mounts[i]->destination;
-          if (!rootfs)
-            target = def->mounts[i]->destination;
-          else
-            {
-              xasprintf (&target_buffer, "%s/%s", rootfs, resolved_path + 1);
-              target = target_buffer;
-            }
-        }
+      bool allow_symlinks = true;
 
       type = def->mounts[i]->type;
 
@@ -954,6 +937,41 @@ do_mounts (libcrun_container_t *container, const char *rootfs, libcrun_error_t *
 
       if (type == NULL)
         return crun_make_error (err, 0, "invalid mount type for %s", def->mounts[i]->destination);
+
+      /* do not allow symlinks in the target when dealing with sysfs and proc.  */
+      allow_symlinks = (strcmp (type, "sysfs") != 0) && (strcmp (type, "proc") != 0);
+
+      if (allow_symlinks)
+        {
+          resolved_path = chroot_realpath (rootfs, def->mounts[i]->destination, buffer_resolved_path);
+          if (resolved_path == NULL && errno != ENOENT)
+            return crun_make_error (err, errno, "cannot resolve %s", def->mounts[i]->destination);
+        }
+
+      if (resolved_path != NULL)
+        target = resolved_path;
+      else
+        {
+          resolved_path = def->mounts[i]->destination;
+          if (!rootfs)
+            target = def->mounts[i]->destination;
+          else
+            {
+              xasprintf (&target_buffer, "%s/%s", rootfs, resolved_path + 1);
+              target = target_buffer;
+              if (! allow_symlinks)
+                {
+                  mode_t mode;
+
+                  /* If the directory doesn't exist it will be created later.  */
+                  ret = get_file_type (&mode, true, target);
+                  if (UNLIKELY (ret < 0 && errno != ENOENT))
+                    return crun_make_error (err, errno, "read file type for `%s`", def->mounts[i]->destination);
+                  if (ret == 0 && !S_ISDIR (mode))
+                    return crun_make_error (err, 0, "invalid type for `%s`.  It must be a directory", def->mounts[i]->destination);
+                }
+            }
+        }
 
       if (strcmp (type, "bind") == 0)
         {

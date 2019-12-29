@@ -207,7 +207,7 @@ detach_process ()
   return 0;
 }
 
-static int
+int
 get_file_type_at (int dirfd, mode_t *mode, bool nofollow, const char *path)
 {
   struct stat st;
@@ -234,7 +234,7 @@ get_file_type_at (int dirfd, mode_t *mode, bool nofollow, const char *path)
   return ret;
 }
 
-static int
+int
 get_file_type (mode_t *mode, bool nofollow, const char *path)
 {
   return get_file_type_at (AT_FDCWD, mode, nofollow, path);
