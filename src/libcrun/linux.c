@@ -343,7 +343,7 @@ do_mount (libcrun_container_t *container,
           const char *fstype,
           unsigned long mountflags,
           const void *data,
-          int skip_labelling,
+          bool skip_labelling,
           libcrun_error_t *err)
 {
   int ret = 0;
@@ -903,7 +903,6 @@ do_mounts (libcrun_container_t *container, const char *rootfs, libcrun_error_t *
       char *source;
       unsigned long flags = 0;
       unsigned long extra_flags = 0;
-      int skip_labelling;
       int is_dir = 1;
       char *resolved_path, buffer_resolved_path[PATH_MAX];
       char *target = NULL;
@@ -1016,10 +1015,6 @@ do_mounts (libcrun_container_t *container, const char *rootfs, libcrun_error_t *
 
       source = def->mounts[i]->source ? def->mounts[i]->source : type;
 
-      skip_labelling = strcmp (type, "sysfs") == 0
-        || strcmp (type, "proc") == 0
-        || strcmp (type, "mqueue") == 0;
-
       if (strcmp (type, "cgroup") == 0)
         {
           ret = do_mount_cgroup (container, source, target, flags, err);
@@ -1028,6 +1023,10 @@ do_mounts (libcrun_container_t *container, const char *rootfs, libcrun_error_t *
         }
       else
         {
+          bool skip_labelling = strcmp (type, "sysfs") == 0
+            || strcmp (type, "proc") == 0
+            || strcmp (type, "mqueue") == 0;
+
           ret = do_mount (container, source, target, type, flags, data, skip_labelling, err);
           if (UNLIKELY (ret < 0))
             return ret;
