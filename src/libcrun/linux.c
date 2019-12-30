@@ -23,7 +23,6 @@
 #include "utils.h"
 #include <string.h>
 #include <sched.h>
-#include <fcntl.h>
 #include <unistd.h>
 #include <sys/mount.h>
 #include <sys/syscall.h>
@@ -46,6 +45,12 @@
 #include <limits.h>
 #include <inttypes.h>
 #include <sys/personality.h>
+#include <linux/mount.h>
+#include <fcntl.h>
+
+/* workaround for some double defined symbols.  */
+#define _ASM_GENERIC_FCNTL_H
+#include <linux/fcntl.h>
 
 #ifndef RLIMIT_RTTIME
 # define RLIMIT_RTTIME 15
@@ -54,9 +59,101 @@
 /* Defined in chroot_realpath.c  */
 char *chroot_realpath (const char *chroot, const char *path, char resolved_path[]);
 
+#ifdef __NR_fsopen
+
+static inline int
+fsopen (const char *fs_name, unsigned int flags)
+{
+  return syscall(__NR_fsopen, fs_name, flags);
+}
+
+static inline int
+fsmount (int fsfd, unsigned int flags, unsigned int ms_flags)
+{
+  return syscall(__NR_fsmount, fsfd, flags, ms_flags);
+}
+
+static inline int
+fsconfig (int fsfd, unsigned int cmd,
+          const char *key, const void *val, int aux)
+{
+  return syscall(__NR_fsconfig, fsfd, cmd, key, val, aux);
+}
+
+static inline int
+open_tree (int dfd, const char *filename, unsigned int flags)
+{
+  return syscall(__NR_open_tree, dfd, filename, flags);
+}
+
+static inline
+int move_mount (int from_dfd, const char *from_pathname,
+                int to_dfd, const char *to_pathname,
+                unsigned int flags)
+{
+  return syscall (__NR_move_mount,
+                 from_dfd, from_pathname,
+                 to_dfd, to_pathname, flags);
+}
+
+static inline int
+fspick (int dfd, const char *path, unsigned int flags)
+{
+  return syscall(__NR_fspick, dfd, path, flags);
+}
+
+#else
+
+static inline int
+fsopen (const char *fs_name, unsigned int flags)
+{
+  errno = ENOTSUP;
+  return -1;
+}
+
+static inline int
+fsmount (int fsfd, unsigned int flags, unsigned int ms_flags)
+{
+  errno = ENOTSUP;
+  return -1;
+}
+
+static inline int
+fsconfig (int fsfd, unsigned int cmd,
+          const char *key, const void *val, int aux)
+{
+  errno = ENOTSUP;
+  return -1;
+}
+
+static inline int
+open_tree (int dfd, const char *filename, unsigned int flags)
+{
+  errno = ENOTSUP;
+  return -1;
+}
+
+static inline
+int move_mount (int from_dfd, const char *from_pathname,
+                int to_dfd, const char *to_pathname,
+                unsigned int flags)
+{
+  errno = ENOTSUP;
+  return -1;
+}
+
+static inline int
+fspick (int dfd, const char *path, unsigned int flags)
+{
+  errno = ENOTSUP;
+  return -1;
+}
+#endif
+
 struct remount_s
 {
   struct remount_s *next;
+  int mfd;
   char *target;
   unsigned long flags;
   char *data;
@@ -69,6 +166,8 @@ struct private_data_s
   /* Filled by libcrun_run_linux_container().  Useful to query what
      namespaces are available.  */
   int unshare_flags;
+
+  int fstreefd;
 
   char *host_notify_socket_path;
   char *container_notify_socket_path;
@@ -90,6 +189,7 @@ get_private_data (struct libcrun_container_s *container)
     {
       struct private_data_s *p = xmalloc (sizeof (*p));
       memset (p, 0, sizeof (*p));
+      p->fstreefd = -1;
       container->private_data = p;
     }
   return container->private_data;
@@ -137,7 +237,7 @@ libcrun_create_keyring (const char *name, libcrun_error_t *err)
 {
   int ret = syscall_keyctl_join (name);
   if (UNLIKELY (ret < 0))
-    return crun_make_error (err, errno, "create keyring '%s'", name);
+    return crun_make_error (err, errno, "create keyring `%s`", name);
   return 0;
 }
 
@@ -255,19 +355,51 @@ pivot_root (const char * new_root, const char * put_old)
   return syscall (__NR_pivot_root, new_root, put_old);
 }
 
+static int
+do_fsconfig (int mfd,
+             libcrun_container_t *container,
+             const char *source,
+             const char *target,
+             unsigned long mountflags,
+             const void *data,
+             libcrun_error_t *err)
+{
+  int ret;
+
+  if (source)
+    {
+      ret = fsconfig (mfd, FSCONFIG_SET_STRING, "source", source, 0);
+      if (UNLIKELY (ret < 0))
+        return crun_make_error (err, errno, "set source to `%s`", source);
+    }
+
+  if (mountflags & MS_RDONLY)
+    {
+      ret = fsconfig (mfd, FSCONFIG_SET_FLAG, "ro", NULL, 0);
+      if (UNLIKELY (ret < 0))
+        return crun_make_error (err, errno, "fsconfig `%s` to readonly", target);
+    }
+
+  /* TODO: convert mountflags and data.  */
+  return 0;
+}
+
 static void
 free_remount (struct remount_s *r)
 {
+  if (r->mfd >= 0)
+    close (r->mfd);
   free (r->data);
   free (r->target);
   free (r);
 }
 
 static struct remount_s *
-make_remount (const char *target, unsigned long flags, const char *data, struct remount_s *next)
+make_remount (int mfd, const char *target, unsigned long flags, const char *data, struct remount_s *next)
 {
   struct remount_s *ret = xmalloc (sizeof (*ret));
-  ret->target = xstrdup (target);
+  ret->mfd = mfd;
+  ret->target = target ? xstrdup (target) : NULL;
   ret->flags = flags;
   ret->data = data ? xstrdup (data) : NULL;
   ret->next = next;
@@ -275,10 +407,26 @@ make_remount (const char *target, unsigned long flags, const char *data, struct 
 }
 
 static int
-do_remount (const char *target, unsigned long flags, const char *data, libcrun_error_t *err)
+do_remount (libcrun_container_t *container, int mfd, const char *target, unsigned long flags, const char *data, libcrun_error_t *err)
 {
   int ret;
 
+  if (mfd >= 0)
+    {
+      cleanup_close int fd = fspick (mfd, "", FSPICK_EMPTY_PATH | FSPICK_CLOEXEC | FSPICK_NO_AUTOMOUNT);
+      if (UNLIKELY (fd < 0))
+        return crun_make_error (err, errno, "fspick `%s`", target);
+
+      ret = do_fsconfig (fd, container, NULL, target, flags, data, err);
+      if (UNLIKELY (ret < 0))
+        return ret;
+
+      ret = fsconfig (fd, FSCONFIG_CMD_RECONFIGURE, NULL, NULL, 0);
+      if (UNLIKELY (ret < 0))
+        return crun_make_error (err, errno, "fsconfig reconfigure `%s`", target);
+
+      return 0;
+    }
   ret = mount (NULL, target, NULL, flags, data);
   if (UNLIKELY (ret < 0))
     {
@@ -287,7 +435,7 @@ do_remount (const char *target, unsigned long flags, const char *data, libcrun_e
 
       ret = statfs (target, &sfs);
       if (UNLIKELY (ret < 0))
-        return crun_make_error (err, errno, "statfs '%s'", target);
+        return crun_make_error (err, errno, "statfs `%s`", target);
 
       remount_flags = sfs.f_flags & (MS_NOSUID | MS_NODEV | MS_NOEXEC);
 
@@ -302,7 +450,7 @@ do_remount (const char *target, unsigned long flags, const char *data, libcrun_e
           ret = mount ("none", target, "", flags | remount_flags, data);
         }
       if (UNLIKELY (ret < 0))
-        return crun_make_error (err, errno, "remount '%s'", target);
+        return crun_make_error (err, errno, "remount `%s`", target);
     }
   return 0;
 }
@@ -316,7 +464,7 @@ finalize_mounts (libcrun_container_t *container, libcrun_error_t *err)
     {
       struct remount_s *next = r->next;
 
-      ret = do_remount (r->target, r->flags, r->data, err);
+      ret = do_remount (container, r->mfd, r->target, r->flags, r->data, err);
       if (UNLIKELY (ret < 0))
         goto cleanup;
 
@@ -337,14 +485,82 @@ finalize_mounts (libcrun_container_t *container, libcrun_error_t *err)
 }
 
 static int
-do_mount (libcrun_container_t *container,
-          const char *source,
-          const char *target,
-          const char *fstype,
-          unsigned long mountflags,
-          const void *data,
-          bool skip_labelling,
-          libcrun_error_t *err)
+do_mount_fs (libcrun_container_t *container,
+             const char *source,
+             const char *target,
+             const char *fstype,
+             unsigned long mountflags,
+             const void *data,
+             bool skip_labelling,
+             libcrun_error_t *err)
+{
+  int ret;
+  int treefd = get_private_data (container)->fstreefd;
+  cleanup_close int fd = -1;
+
+  /* TODO: honor propagation flags.  */
+
+  if (fstype == NULL && source == NULL)
+    {
+      fd = fspick (AT_FDCWD, target, FSPICK_CLOEXEC);
+      if (UNLIKELY (fd < 0))
+        return crun_make_error (err, errno, "fspick `%s`", target);
+
+      ret = do_fsconfig (fd, container, source, target, mountflags, data, err);
+      if (UNLIKELY (ret < 0))
+        return ret;
+
+      ret = fsconfig (fd, FSCONFIG_CMD_RECONFIGURE, NULL, NULL, 0);
+      if (UNLIKELY (ret < 0))
+        return crun_make_error (err, errno, "fsconfig reconfigure `%s`", target);
+    }
+  else if (fstype == NULL || strcmp (fstype, "bind") == 0)
+    {
+      fd = open_tree (AT_FDCWD, source, OPEN_TREE_CLONE | ((mountflags & MS_REC) ? AT_RECURSIVE : 0));
+      if (UNLIKELY (fd < 0))
+        return crun_make_error (err, errno, "open_tree `%s`", fstype);
+
+      ret = move_mount (fd, "", AT_FDCWD, target, MOVE_MOUNT_F_EMPTY_PATH);
+      if (UNLIKELY (ret < 0))
+        return crun_make_error (err, errno, "move mount to `%s`", target);
+    }
+  else
+    {
+      cleanup_close int mfd = -1;
+
+      fd = fsopen (fstype, FSOPEN_CLOEXEC);
+      if (UNLIKELY (fd < 0))
+        return crun_make_error (err, errno, "open fstype `%s`", fstype);
+
+      ret = do_fsconfig (fd, container, source, target, mountflags, data, err);
+      if (UNLIKELY (ret < 0))
+        return ret;
+
+      ret = fsconfig (fd, FSCONFIG_CMD_CREATE, NULL, NULL, 0);
+      if (UNLIKELY (ret < 0))
+        return crun_make_error (err, errno, "create mount `%s`", source);
+
+      mfd = fsmount (fd, FSMOUNT_CLOEXEC, 0);
+      if (UNLIKELY (mfd < 0))
+        return crun_make_error (err, errno, "fsmount `%s`", source);
+
+      ret = move_mount (mfd, "", AT_FDCWD, target, MOVE_MOUNT_F_EMPTY_PATH);
+      if (UNLIKELY (ret < 0))
+        return crun_make_error (err, errno, "move mount to `%s`", target);
+    }
+
+  return 0;
+}
+
+static int
+do_mount_mount (libcrun_container_t *container,
+                              const char *source,
+                              const char *target,
+                              const char *fstype,
+                              unsigned long mountflags,
+                              const void *data,
+                              bool skip_labelling,
+                              libcrun_error_t *err)
 {
   int ret = 0;
   cleanup_free char *data_with_label = NULL;
@@ -384,7 +600,7 @@ do_mount (libcrun_container_t *container,
                 return 0;
             }
 
-          return crun_make_error (err, saved_errno, "mount '%s' to '%s'", source, target);
+          return crun_make_error (err, saved_errno, "mount `%s` to `%s`", source, target);
         }
 
       if ((flags & MS_BIND) && (flags & ~(MS_BIND | MS_RDONLY | ALL_PROPAGATIONS)))
@@ -403,7 +619,7 @@ do_mount (libcrun_container_t *container,
             continue;
           ret = mount (NULL, target, NULL, rec | all_propagations[s], NULL);
           if (UNLIKELY (ret < 0))
-            return crun_make_error (err, errno, "set propagation for '%s'", target);
+            return crun_make_error (err, errno, "set propagation for `%s`", target);
         }
     }
 
@@ -416,7 +632,7 @@ do_mount (libcrun_container_t *container,
 
       if ((remount_flags & MS_RDONLY) == 0)
         {
-          ret = do_remount (target, remount_flags, NULL, err);
+          ret = do_remount (container, -1, target, remount_flags, NULL, err);
           if (UNLIKELY (ret < 0))
             return ret;
         }
@@ -424,12 +640,27 @@ do_mount (libcrun_container_t *container,
         {
           struct remount_s *r;
 
-          r = make_remount (target, remount_flags, NULL, get_private_data (container)->remounts);
+          r = make_remount (-1, target, remount_flags, NULL, get_private_data (container)->remounts);
           get_private_data (container)->remounts = r;
         }
     }
 
   return ret;
+}
+
+static int
+do_mount (libcrun_container_t *container,
+          const char *source,
+          const char *target,
+          const char *fstype,
+          unsigned long mountflags,
+          const void *data,
+          bool skip_labelling,
+          libcrun_error_t *err)
+{
+  if (get_private_data (container)->fstreefd >= 0)
+      return do_mount_fs (container, source, target, fstype, mountflags, data, skip_labelling, err);
+  return do_mount_mount (container, source, target, fstype, mountflags, data, skip_labelling, err);
 }
 
 static int
@@ -530,7 +761,7 @@ do_mount_cgroup_v1 (libcrun_container_t *container,
 
       ret = mkdir (subsystem_path, 0755);
       if (UNLIKELY (ret < 0))
-        return crun_make_error (err, errno, "mkdir for '%s' failed", subsystem_path);
+        return crun_make_error (err, errno, "mkdir for `%s` failed", subsystem_path);
 
       ret = do_mount (container, source_path, subsystem_path, NULL, MS_BIND | mountflags, NULL, 0, err);
       if (UNLIKELY (ret < 0))
@@ -610,7 +841,7 @@ create_dev (libcrun_container_t *container, int devfd, struct device_s *device, 
 
       path_to_container = chroot_realpath (rootfs, device->path, buffer);
       if (path_to_container == NULL)
-        return crun_make_error (err, errno, "cannot resolve '%s'", device->path);
+        return crun_make_error (err, errno, "cannot resolve `%s`", device->path);
 
       ret = crun_ensure_file (path_to_container, 0700, true, err);
       if (UNLIKELY (ret < 0))
@@ -631,11 +862,11 @@ create_dev (libcrun_container_t *container, int devfd, struct device_s *device, 
           if (UNLIKELY (ret < 0 && errno == EEXIST))
             return 0;
           if (UNLIKELY (ret < 0))
-            return crun_make_error (err, errno, "mknod '%s'", device->path);
+            return crun_make_error (err, errno, "mknod `%s`", device->path);
 
           ret = fchmodat (devfd, device->path, device->mode, 0);
           if (UNLIKELY (ret < 0))
-            return crun_make_error (err, errno, "fchmodat '%s'", device->path);
+            return crun_make_error (err, errno, "fchmodat `%s`", device->path);
         }
       else
         {
@@ -643,7 +874,7 @@ create_dev (libcrun_container_t *container, int devfd, struct device_s *device, 
 
           resolved_path = chroot_realpath (rootfs, device->path, buffer);
           if (resolved_path == NULL)
-            return crun_make_error (err, errno, "cannot resolve '%s'", device->path);
+            return crun_make_error (err, errno, "cannot resolve `%s`", device->path);
 
           if (ensure_parent_dir)
             {
@@ -665,11 +896,11 @@ create_dev (libcrun_container_t *container, int devfd, struct device_s *device, 
           if (UNLIKELY (ret < 0 && errno == EEXIST))
             return 0;
           if (UNLIKELY (ret < 0))
-            return crun_make_error (err, errno, "mknod '%s'", device->path);
+            return crun_make_error (err, errno, "mknod `%s`", device->path);
 
           ret = chmod (resolved_path, device->mode);
           if (UNLIKELY (ret < 0))
-            return crun_make_error (err, errno, "fchmodat '%s'", device->path);
+            return crun_make_error (err, errno, "fchmodat `%s`", device->path);
         }
 
     }
@@ -704,11 +935,11 @@ create_missing_devs (libcrun_container_t *container, const char *rootfs, bool bi
   oci_container *def = container->container_def;
 
   if (UNLIKELY (dirfd < 0))
-    return crun_make_error (err, errno, "open rootfs directory '%s'", rootfs);
+    return crun_make_error (err, errno, "open rootfs directory `%s`", rootfs);
 
   devfd = openat (dirfd, "dev", O_RDONLY | O_DIRECTORY);
   if (UNLIKELY (devfd < 0))
-    return crun_make_error (err, errno, "open /dev directory in '%s'", rootfs);
+    return crun_make_error (err, errno, "open /dev directory in `%s`", rootfs);
 
   for (i = 0; i < def->linux->devices_len; i++)
     {
@@ -813,11 +1044,11 @@ do_pivot (libcrun_container_t *container, const char *rootfs, libcrun_error_t *e
   if (UNLIKELY (oldrootfd < 0))
     return crun_make_error (err, errno, "open '/'");
   if (UNLIKELY (newrootfd < 0))
-    return crun_make_error (err, errno, "open '%s'", rootfs);
+    return crun_make_error (err, errno, "open `%s`", rootfs);
 
   ret = fchdir (newrootfd);
   if (UNLIKELY (ret < 0))
-    return crun_make_error (err, errno, "fchdir '%s'", rootfs);
+    return crun_make_error (err, errno, "fchdir `%s`", rootfs);
 
   ret = pivot_root (".", ".");
   if (UNLIKELY (ret < 0))
@@ -825,7 +1056,7 @@ do_pivot (libcrun_container_t *container, const char *rootfs, libcrun_error_t *e
 
   ret = fchdir (oldrootfd);
   if (UNLIKELY (ret < 0))
-    return crun_make_error (err, errno, "fchdir '%s'", rootfs);
+    return crun_make_error (err, errno, "fchdir `%s`", rootfs);
 
   ret = do_mount (container, NULL, ".", NULL, MS_REC | MS_PRIVATE, NULL, 0, err);
   if (UNLIKELY (ret < 0))
@@ -895,6 +1126,7 @@ do_mounts (libcrun_container_t *container, const char *rootfs, libcrun_error_t *
   size_t i;
   int ret;
   oci_container *def = container->container_def;
+
   for (i = 0; i < def->mounts_len; i++)
     {
       cleanup_free char *target_buffer = NULL;
@@ -908,6 +1140,7 @@ do_mounts (libcrun_container_t *container, const char *rootfs, libcrun_error_t *
       char *target = NULL;
       cleanup_close int copy_from_fd = -1;
       bool allow_symlinks = true;
+      char *relative_target = NULL;
 
       type = def->mounts[i]->type;
 
@@ -949,10 +1182,13 @@ do_mounts (libcrun_container_t *container, const char *rootfs, libcrun_error_t *
         }
 
       if (resolved_path != NULL)
-        target = resolved_path;
+        {
+          target = resolved_path;
+          relative_target = target + strlen (rootfs) + 1;
+        }
       else
         {
-          resolved_path = def->mounts[i]->destination;
+          relative_target = resolved_path = def->mounts[i]->destination;
           if (!rootfs)
             target = def->mounts[i]->destination;
           else
@@ -1218,6 +1454,7 @@ libcrun_set_mounts (libcrun_container_t *container, const char *rootfs, libcrun_
   oci_container *def = container->container_def;
   int ret = 0, is_user_ns = 0;
   unsigned long rootfs_propagation = 0;
+  cleanup_close int fstreefd = -1;
 
   if (def->linux->rootfs_propagation)
     rootfs_propagation = get_mount_flags (def->linux->rootfs_propagation, 0, NULL, NULL);
@@ -1237,15 +1474,28 @@ libcrun_set_mounts (libcrun_container_t *container, const char *rootfs, libcrun_
       if (UNLIKELY (ret < 0))
         return ret;
 
-      ret = do_mount (container, rootfs, rootfs, NULL, MS_BIND | MS_REC | MS_PRIVATE, NULL, 0, err);
+#define USE_NEW_API
+#ifdef USE_NEW_API
+      fstreefd = open_tree (AT_FDCWD, rootfs, OPEN_TREE_CLONE | AT_RECURSIVE | OPEN_TREE_CLOEXEC);
+      get_private_data (container)->fstreefd = fstreefd;
+
+      ret = move_mount (fstreefd, "", AT_FDCWD, rootfs, MOVE_MOUNT_F_EMPTY_PATH);
       if (UNLIKELY (ret < 0))
-        return ret;
+        return crun_make_error (err, errno, "move rootfs to `%s`", rootfs);
+#endif
+
+      if (fstreefd < 0)
+        {
+          ret = do_mount (container, rootfs, rootfs, NULL, MS_BIND | MS_REC | MS_PRIVATE, NULL, 0, err);
+          if (UNLIKELY (ret < 0))
+            return ret;
+        }
     }
 
   if (def->root->readonly)
     {
       unsigned long remount_flags = MS_REMOUNT | MS_BIND | MS_RDONLY;
-      struct remount_s *r = make_remount (rootfs, remount_flags, NULL, get_private_data (container)->remounts);
+      struct remount_s *r = make_remount (fstreefd, rootfs, remount_flags, NULL, get_private_data (container)->remounts);
       get_private_data (container)->remounts = r;
     }
 
@@ -1294,7 +1544,7 @@ move_root (const char *rootfs, libcrun_error_t *err)
 
   ret = chdir (rootfs);
   if (UNLIKELY (ret < 0))
-    return crun_make_error (err, errno, "chdir to '%s'", rootfs);
+    return crun_make_error (err, errno, "chdir to `%s`", rootfs);
 
   ret = umount2 ("/sys", MNT_DETACH);
   if (UNLIKELY (ret < 0))
@@ -1310,11 +1560,11 @@ move_root (const char *rootfs, libcrun_error_t *err)
 
   ret = chroot (".");
   if (UNLIKELY (ret < 0))
-    return crun_make_error (err, errno, "chroot to '%s'", rootfs);
+    return crun_make_error (err, errno, "chroot to `%s`", rootfs);
 
   ret = chdir ("/");
   if (UNLIKELY (ret < 0))
-    return crun_make_error (err, errno, "chdir to '%s'", rootfs);
+    return crun_make_error (err, errno, "chdir to `%s`", rootfs);
 
   return 0;
 }
@@ -1346,7 +1596,7 @@ libcrun_do_pivot_root (libcrun_container_t *container, bool no_pivot, const char
     {
       ret = chroot (rootfs);
       if (UNLIKELY (ret < 0))
-        return crun_make_error (err, errno, "chroot to '%s'", rootfs);
+        return crun_make_error (err, errno, "chroot to `%s`", rootfs);
     }
 
   ret = chdir ("/");
@@ -1793,11 +2043,11 @@ libcrun_set_rlimits (oci_container_process_rlimits_element **new_rlimits, size_t
       char *type = new_rlimits[i]->type;
       int resource = get_rlimit_resource (type);
       if (UNLIKELY (resource < 0))
-        return crun_make_error (err, errno, "invalid rlimit '%s'", type);
+        return crun_make_error (err, errno, "invalid rlimit `%s`", type);
       limit.rlim_cur = new_rlimits[i]->soft;
       limit.rlim_max = new_rlimits[i]->hard;
       if (UNLIKELY (setrlimit (resource, &limit) < 0))
-        return crun_make_error (err, errno, "setrlimit '%s'", type);
+        return crun_make_error (err, errno, "setrlimit `%s`", type);
     }
   return 0;
 }
@@ -1995,7 +2245,7 @@ libcrun_run_linux_container (libcrun_container_t *container,
 
           fd = open (def->linux->namespaces[i]->path, O_RDONLY);
           if (UNLIKELY (fd < 0))
-              return crun_make_error (err, errno, "open '%s'", def->linux->namespaces[i]->path);
+              return crun_make_error (err, errno, "open `%s`", def->linux->namespaces[i]->path);
 
           if (value == CLONE_NEWUSER)
             userns_join_index = n_namespaces_to_join;
@@ -2117,7 +2367,7 @@ libcrun_run_linux_container (libcrun_container_t *container,
           ret = setns (namespaces_to_join[userns_join_index], CLONE_NEWUSER);
           if (UNLIKELY (ret < 0))
             {
-              crun_make_error (err, errno, "cannot setns '%s'", def->linux->namespaces[userns_join_index]->path);
+              crun_make_error (err, errno, "cannot setns `%s`", def->linux->namespaces[userns_join_index]->path);
               goto out;
             }
         }
@@ -2160,7 +2410,7 @@ libcrun_run_linux_container (libcrun_container_t *container,
       ret = setns (namespaces_to_join[i], value);
       if (UNLIKELY (ret < 0))
         {
-          crun_make_error (err, errno, "cannot setns '%s'", def->linux->namespaces[orig_index]->path);
+          crun_make_error (err, errno, "cannot setns `%s`", def->linux->namespaces[orig_index]->path);
           goto out;
         }
       if (value == CLONE_NEWNS)
@@ -2307,7 +2557,7 @@ inherit_env (pid_t pid_to_join, libcrun_error_t *err)
 
   for (str = content; str < content + len; str += strlen (str) + 1)
     if (putenv (str) < 0)
-        return crun_make_error (err, errno, "putenv '%s'", str);
+        return crun_make_error (err, errno, "putenv `%s`", str);
   return ret;
 }
 
@@ -2381,7 +2631,7 @@ libcrun_join_process (libcrun_container_t *container, pid_t pid_to_join, libcrun
       fds[i] = open (ns_join, O_RDONLY);
       if (UNLIKELY (fds[i] < 0))
         {
-          ret = crun_make_error (err, errno, "open '%s'", ns_join);
+          ret = crun_make_error (err, errno, "open `%s`", ns_join);
           goto exit;
         }
     }
@@ -2415,7 +2665,7 @@ libcrun_join_process (libcrun_container_t *container, pid_t pid_to_join, libcrun
               fds_joined[i] = 1;
               continue;
             }
-          crun_make_error (err, errno, "setns '%s'", all_namespaces[i]);
+          crun_make_error (err, errno, "setns `%s`", all_namespaces[i]);
           goto exit;
         }
       fds_joined[i] = 1;
@@ -2567,11 +2817,11 @@ libcrun_set_personality (oci_container_linux_personality *p, libcrun_error_t *er
   else if (strcmp (p->domain, "LINUX32") == 0)
       persona = PER_LINUX32;
   else
-    return crun_make_error (err, 0, "unknown persona specified '%s'", p->domain);
+    return crun_make_error (err, 0, "unknown persona specified `%s`", p->domain);
 
   ret = personality (persona);
   if (UNLIKELY (ret < 0))
-    return crun_make_error (err, 0, "set personality to '%s'", p->domain);
+    return crun_make_error (err, 0, "set personality to `%s`", p->domain);
 
   return 0;
 }

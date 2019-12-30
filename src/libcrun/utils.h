@@ -74,7 +74,13 @@ int crun_ensure_directory (const char *path, int mode, bool nofollow, libcrun_er
 
 int crun_ensure_file (const char *path, int mode, bool nofollow, libcrun_error_t *err);
 
+int crun_ensure_directory_at (int dirfd, const char *path, int mode, bool nofollow, libcrun_error_t *err);
+
+int crun_ensure_file_at (int dirfd, const char *path, int mode, bool nofollow, libcrun_error_t *err);
+
 int crun_dir_p (const char *path, bool nofollow, libcrun_error_t *err);
+
+int crun_dir_p_at (int dirfd, const char *path, bool nofollow, libcrun_error_t *err);
 
 int detach_process ();
 

@@ -279,7 +279,7 @@ create_file_if_missing (const char *file, libcrun_error_t *err)
 }
 
 static int
-ensure_directory_internal (char *path, size_t len, int mode, libcrun_error_t *err)
+ensure_directory_internal_at (int dirfd, char *path, size_t len, int mode, libcrun_error_t *err)
 {
   char *it = path + len;
   int ret = 0;
@@ -287,7 +287,7 @@ ensure_directory_internal (char *path, size_t len, int mode, libcrun_error_t *er
 
   for (parent_created = 0; parent_created < 2; parent_created++)
     {
-      ret = mkdir (path, mode);
+      ret = mkdirat (dirfd, path, mode);
       if (ret == 0)
         break;
 
@@ -320,7 +320,7 @@ ensure_directory_internal (char *path, size_t len, int mode, libcrun_error_t *er
             }
 
           *it = '\0';
-          ret = ensure_directory_internal (path, len - 1, mode, err);
+          ret = ensure_directory_internal_at (dirfd, path, len - 1, mode, err);
           *it = '/';
           if (UNLIKELY (ret < 0))
             break;
@@ -330,15 +330,15 @@ ensure_directory_internal (char *path, size_t len, int mode, libcrun_error_t *er
 }
 
 int
-crun_ensure_directory (const char *path, int mode, bool nofollow, libcrun_error_t *err)
+crun_ensure_directory_at (int dirfd, const char *path, int mode, bool nofollow, libcrun_error_t *err)
 {
   int ret;
   cleanup_free char *tmp = xstrdup (path);
-  ret = ensure_directory_internal (tmp, strlen (tmp), mode, err);
+  ret = ensure_directory_internal_at (dirfd, tmp, strlen (tmp), mode, err);
   if (UNLIKELY (ret < 0))
     return ret;
 
-  ret = crun_dir_p (path, nofollow, err);
+  ret = crun_dir_p_at (dirfd, path, nofollow, err);
   if (UNLIKELY (ret < 0))
     return ret;
 
@@ -349,7 +349,13 @@ crun_ensure_directory (const char *path, int mode, bool nofollow, libcrun_error_
 }
 
 int
-crun_ensure_file (const char *path, int mode, bool nofollow, libcrun_error_t *err)
+crun_ensure_directory (const char *path, int mode, bool nofollow, libcrun_error_t *err)
+{
+  return crun_ensure_directory_at (AT_FDCWD, path, mode, nofollow, err);
+}
+
+int
+crun_ensure_file_at (int dirfd, const char *path, int mode, bool nofollow, libcrun_error_t *err)
 {
   cleanup_free char *tmp = xstrdup (path);
   size_t len = strlen (tmp);
@@ -361,14 +367,20 @@ crun_ensure_file (const char *path, int mode, bool nofollow, libcrun_error_t *er
   if (it > tmp)
     {
       *it = '\0';
-      ret = crun_ensure_directory (tmp, mode, nofollow, err);
+      ret = crun_ensure_directory_at (dirfd, tmp, mode, nofollow, err);
       if (UNLIKELY (ret < 0))
         return ret;
       *it = '/';
 
-      return create_file_if_missing (tmp, err);
+      return create_file_if_missing_at (dirfd, tmp, err);
     }
   return 0;
+}
+
+int
+crun_ensure_file (const char *path, int mode, bool nofollow, libcrun_error_t *err)
+{
+  return crun_ensure_file_at (AT_FDCWD, path, mode, nofollow, err);
 }
 
 static int
@@ -398,16 +410,22 @@ get_file_size (int fd, off_t *size)
 }
 
 int
-crun_dir_p (const char *path, bool nofollow, libcrun_error_t *err)
+crun_dir_p_at (int dirfd, const char *path, bool nofollow, libcrun_error_t *err)
 {
   mode_t mode;
   int ret;
 
-  ret = get_file_type (&mode, nofollow, path);
+  ret = get_file_type_at (dirfd, &mode, nofollow, path);
   if (UNLIKELY (ret < 0))
     return crun_make_error (err, errno, "error stat'ing file '%s'", path);
 
   return S_ISDIR (mode);
+}
+
+int
+crun_dir_p (const char *path, bool nofollow, libcrun_error_t *err)
+{
+  return crun_dir_p_at (AT_FDCWD, path, nofollow, err);
 }
 
 int
