@@ -963,6 +963,9 @@ do_mounts (libcrun_container_t *container, const char *rootfs, libcrun_error_t *
                 {
                   mode_t mode;
 
+                  if (strchr (resolved_path + 1, '/') != NULL)
+                    libcrun_warning ("fs type `%s` not mounted at the root, it may cause potential race conditions when resolving symlinks", type);
+
                   /* If the directory doesn't exist it will be created later.  */
                   ret = get_file_type (&mode, true, target);
                   if (UNLIKELY (ret < 0 && errno != ENOENT))
