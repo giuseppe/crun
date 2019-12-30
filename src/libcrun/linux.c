@@ -371,7 +371,7 @@ do_mount (libcrun_container_t *container,
         {
           int saved_errno = errno;
 
-          if (strcmp (fstype ? fstype : "", "sysfs") == 0)
+          if (fstype && strcmp (fstype, "sysfs") == 0)
             {
               /* If we are running in an user namespace, just bind mount /sys if creating
                  sysfs failed.  */
