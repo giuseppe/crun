@@ -139,7 +139,7 @@ libcrun_find_namespace (const char *name)
   return -1;
 }
 
-static int
+static pid_t
 syscall_clone (unsigned long flags, void *child_stack)
 {
 #if defined __s390__ || defined __CRIS__
@@ -147,6 +147,39 @@ syscall_clone (unsigned long flags, void *child_stack)
 #else
   return (int) syscall (__NR_clone, flags, child_stack);
 #endif
+}
+
+#ifndef __aligned_u64
+# define __aligned_u64 uint64_t __attribute__((aligned(8)))
+#endif
+
+struct clone3_args
+{
+	__aligned_u64 flags;
+	__aligned_u64 pidfd;
+	__aligned_u64 child_tid;
+	__aligned_u64 parent_tid;
+	__aligned_u64 exit_signal;
+	__aligned_u64 stack;
+	__aligned_u64 stack_size;
+	__aligned_u64 tls;
+	__aligned_u64 set_tid;
+	__aligned_u64 set_tid_size;
+	__aligned_u64 cgroup;
+};
+
+#ifndef __NR_clone3
+# define __NR_clone3 435
+#endif
+
+#ifndef CLONE_INTO_CGROUP
+# define CLONE_INTO_CGROUP 0x200000000ULL
+#endif
+
+static pid_t
+syscall_clone3 (struct clone3_args *args)
+{
+  return syscall (__NR_clone3, args, sizeof (struct clone3_args));
 }
 
 static int
@@ -2746,6 +2779,13 @@ libcrun_run_linux_container (libcrun_container_t *container,
   _exit (EXIT_FAILURE);
 }
 
+struct join_process_result
+{
+  int result;
+  pid_t pid;
+  bool skip_cgroup;
+};
+
 static int
 join_process_parent_helper (pid_t child_pid,
                             int sync_socket_fd,
@@ -2753,23 +2793,25 @@ join_process_parent_helper (pid_t child_pid,
                             int *terminal_fd,
                             libcrun_error_t *err)
 {
+  bool skip_cgroup_move;
   int ret, pid_status;
-  char res;
   pid_t pid;
+  struct join_process_result join_res;
   cleanup_close int sync_fd = sync_socket_fd;
 
   if (terminal_fd)
     *terminal_fd = -1;
 
   /* Read the status and the PID from the child process.  */
-  ret = TEMP_FAILURE_RETRY (read (sync_fd, &res, 1));
+  ret = TEMP_FAILURE_RETRY (read (sync_fd, &join_res, sizeof (join_res)));
   if (UNLIKELY (ret < 0))
     return crun_make_error (err, errno, "read from sync socket");
 
-  if (res != '0')
+  if (join_res.result != 0)
     return crun_make_error (err, 0, "fail startup");
 
-  ret = TEMP_FAILURE_RETRY (read (sync_fd, &pid, sizeof (pid)));
+  pid = join_res.pid;
+
   if (UNLIKELY (ret < 0))
     return crun_make_error (err, errno, "read from sync socket");
 
@@ -2778,9 +2820,14 @@ join_process_parent_helper (pid_t child_pid,
   if (UNLIKELY (ret < 0))
     return crun_make_error (err, errno, "waitpid for exec child pid");
 
-  ret = libcrun_move_process_to_cgroup (pid, status->cgroup_path, err);
-  if (UNLIKELY (ret < 0))
-    return ret;
+  if (join_res.skip_cgroup)
+    ret = 0;
+  else
+    {
+      ret = libcrun_move_process_to_cgroup (pid, status->cgroup_path, err);
+      if (UNLIKELY (ret < 0))
+        return ret;
+    }
 
   /* The write unblocks the grandchild process so it can run once we setup
      the cgroups.  */
@@ -2802,11 +2849,15 @@ join_process_parent_helper (pid_t child_pid,
 int
 libcrun_join_process (libcrun_container_t *container, pid_t pid_to_join, libcrun_container_status_t *status, int detach, int *terminal_fd, libcrun_error_t *err)
 {
+  bool skip_fork_and_cgroup_move = false;
   pid_t pid;
   int ret;
+  int cgroup_mode;
   int sync_socket_fd[2];
   int fds[10] = {-1, };
   int fds_joined[10] = {0, };
+  cleanup_close int cgroupdirfd = -1;
+  cleanup_close int cgroupnsfd = -1;
   runtime_spec_schema_config_schema *def = container->container_def;
   size_t i;
   cleanup_close int sync_fd = -1;
@@ -2821,6 +2872,10 @@ libcrun_join_process (libcrun_container_t *container, pid_t pid_to_join, libcrun
   ret = socketpair (AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sync_socket_fd);
   if (UNLIKELY (ret < 0))
     return crun_make_error (err, errno, "error creating socketpair");
+
+  cgroup_mode = libcrun_get_cgroup_mode (err);
+  if (cgroup_mode < 0)
+    return cgroup_mode;
 
   pid = fork ();
   if (UNLIKELY (pid < 0))
@@ -2844,6 +2899,18 @@ libcrun_join_process (libcrun_container_t *container, pid_t pid_to_join, libcrun
       goto exit;
     }
 
+  /* If the container is using a cgroup, try to join it directly with clone3.  */
+  if (cgroup_mode == CGROUP_MODE_UNIFIED && status->cgroup_path && status->cgroup_path[0])
+    {
+      cleanup_free char *path_to_cgroup = NULL;
+
+      xasprintf (&path_to_cgroup, "/sys/fs/cgroup%s", status->cgroup_path);
+
+      cgroupdirfd = open (path_to_cgroup, O_NOFOLLOW | O_DIRECTORY | O_RDONLY);
+      if (UNLIKELY (cgroupdirfd < 0))
+        return crun_make_error (err, errno, "open `%s`", path_to_cgroup);
+    }
+
   for (i = 0; namespaces[i].ns_file; i++)
     {
       cleanup_free char *ns_join;
@@ -2860,13 +2927,19 @@ libcrun_join_process (libcrun_container_t *container, pid_t pid_to_join, libcrun
     }
   for (i = 0; namespaces[i].ns_file; i++)
     {
+      if (strcmp (namespaces[i].name, "cgroup") == 0)
+        {
+          cgroupnsfd = fds[i];
+          fds[i] = -1;
+          continue;
+        }
       ret = setns (fds[i], 0);
       if (ret == 0)
         fds_joined[i] = 1;
     }
   for (i = 0; namespaces[i].ns_file; i++)
     {
-      if (fds_joined[i])
+      if (fds_joined[i] || fds[i] < 0)
         continue;
       ret = setns (fds[i], 0);
       if (UNLIKELY (ret < 0 && errno != EINVAL))
@@ -2903,26 +2976,57 @@ libcrun_join_process (libcrun_container_t *container, pid_t pid_to_join, libcrun
     }
 
   /* We need to fork once again to join the PID namespace.  */
-  pid = fork ();
-  if (UNLIKELY (pid < 0))
+  if (cgroupdirfd >= 0)
     {
-      ret = TEMP_FAILURE_RETRY (write (sync_fd, "1", 1));
-      crun_make_error (err, errno, "fork");
-      goto exit;
+      struct clone3_args args =
+        {
+         .flags = CLONE_INTO_CGROUP,
+         .exit_signal = SIGCHLD,
+         .cgroup = cgroupdirfd,
+        };
+
+      pid = syscall_clone3 (&args);
+      if (pid < 0)
+        {
+          if (errno == ENOSYS || errno == E2BIG)
+            goto clone3_fallback;
+          return crun_make_error (err, errno, "clone3");
+        }
+      close_and_reset (&cgroupdirfd);
+      skip_fork_and_cgroup_move = true;
+    }
+
+clone3_fallback:
+  if (! skip_fork_and_cgroup_move)
+    {
+      pid = fork ();
+      if (UNLIKELY (pid < 0))
+        {
+          struct join_process_result join_res =
+            {
+             .result = 1,
+            };
+          ret = TEMP_FAILURE_RETRY (write (sync_fd, &join_res, sizeof (join_res)));
+          crun_make_error (err, errno, "fork");
+          goto exit;
+        }
     }
 
   if (pid)
     {
       /* Just return the PID to the parent helper and exit.  */
-      ret = TEMP_FAILURE_RETRY (write (sync_fd, "0", 1));
-      if (UNLIKELY (ret < 0))
-        _exit (EXIT_FAILURE);
+          struct join_process_result join_res =
+            {
+             .result = 0,
+             .pid = pid,
+             .skip_cgroup = skip_fork_and_cgroup_move,
+            };
 
-      ret = TEMP_FAILURE_RETRY (write (sync_fd, &pid, sizeof (pid)));
-      if (UNLIKELY (ret < 0))
-        _exit (EXIT_FAILURE);
+          ret = TEMP_FAILURE_RETRY (write (sync_fd, &join_res, sizeof (join_res)));
+          if (UNLIKELY (ret < 0))
+            _exit (EXIT_FAILURE);
 
-      _exit (EXIT_SUCCESS);
+          _exit (EXIT_SUCCESS);
     }
   else
     {
@@ -2934,6 +3038,15 @@ libcrun_join_process (libcrun_container_t *container, pid_t pid_to_join, libcrun
       ret = TEMP_FAILURE_RETRY (read (sync_fd, &r, sizeof (r)));
       if (UNLIKELY (ret < 0))
         _exit (EXIT_FAILURE);
+
+      /* At this point we are in the cgroup.  Join the namespace.  */
+      if (cgroupnsfd >= 0)
+        {
+          ret = setns (cgroupnsfd, 0);
+          if (UNLIKELY (ret < 0 && errno != EINVAL))
+            _exit (EXIT_FAILURE);
+          close_and_reset (&cgroupnsfd);
+        }
 
       if (terminal_fd)
         {
