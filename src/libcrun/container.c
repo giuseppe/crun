@@ -69,6 +69,7 @@ struct container_entrypoint_s
   int sync_socket;
 
   int seccomp_fd;
+  int seccomp_receiver_fd;
   int console_socket_fd;
 
   int hooks_out_fd;
@@ -754,11 +755,12 @@ container_init_setup (void *args, char *notify_socket,
           seccomp_flags_len = def->linux->seccomp->flags_len;
         }
 
-      ret = libcrun_apply_seccomp (entrypoint_args->seccomp_fd, seccomp_flags, seccomp_flags_len, err);
+      ret = libcrun_apply_seccomp (entrypoint_args->seccomp_fd, entrypoint_args->seccomp_receiver_fd, seccomp_flags, seccomp_flags_len, err);
       if (UNLIKELY (ret < 0))
         return ret;
 
       close_and_reset (&entrypoint_args->seccomp_fd);
+      close_and_reset (&entrypoint_args->seccomp_receiver_fd);
     }
 
   capabilities = def->process ? def->process->capabilities : NULL;
@@ -879,10 +881,11 @@ container_init (void *args, char *notify_socket, int sync_socket,
           seccomp_flags_len = def->linux->seccomp->flags_len;
         }
 
-      ret = libcrun_apply_seccomp (entrypoint_args->seccomp_fd, seccomp_flags, seccomp_flags_len, err);
+      ret = libcrun_apply_seccomp (entrypoint_args->seccomp_fd, entrypoint_args->seccomp_receiver_fd, seccomp_flags, seccomp_flags_len, err);
       if (UNLIKELY (ret < 0))
         return ret;
       close_and_reset (&entrypoint_args->seccomp_fd);
+      close_and_reset (&entrypoint_args->seccomp_receiver_fd);
     }
 
   if (UNLIKELY (def->process == NULL))
@@ -1473,8 +1476,8 @@ get_root_in_the_userns_for_cgroups (runtime_spec_schema_config_schema *def, uid_
     *uid = *gid = -1;
 }
 
-static
-const char *find_systemd_subgroup (libcrun_container_t *container, int cgroup_mode)
+static const char *
+find_systemd_subgroup (libcrun_container_t *container, int cgroup_mode)
 {
   const char *annotation;
 
@@ -1493,6 +1496,26 @@ const char *find_systemd_subgroup (libcrun_container_t *container, int cgroup_mo
 }
 
 static int
+get_seccomp_receiver_fd (libcrun_container_t *container, int *fd, libcrun_error_t *err)
+{
+  const char *tmp;
+
+  *fd = -1;
+
+  tmp = find_annotation (container, "run.oci.seccomp.receiver");
+  if (tmp == NULL)
+    tmp = getenv ("RUN_OCI_SECCOMP_RECEIVER");
+  if (tmp)
+    {
+      *fd = open_unix_domain_client_socket (tmp, 0, err);
+      if (UNLIKELY (*fd < 0))
+        return crun_error_wrap (err, "open seccomp receiver");
+    }
+
+  return 0;
+}
+
+static int
 libcrun_container_run_internal (libcrun_container_t *container, libcrun_context_t *context, int container_ready_fd, libcrun_error_t *err)
 {
   runtime_spec_schema_config_schema *def = container->container_def;
@@ -1508,6 +1531,7 @@ libcrun_container_run_internal (libcrun_container_t *container, libcrun_context_
   cleanup_close int socket_pair_0 = -1;
   cleanup_close int socket_pair_1 = -1;
   cleanup_close int seccomp_fd = -1;
+  cleanup_close int seccomp_receiver_fd = -1;
   cleanup_close int console_socket_fd = -1;
   cleanup_close int hooks_out_fd = -1;
   cleanup_close int hooks_err_fd = -1;
@@ -1523,6 +1547,7 @@ libcrun_container_run_internal (libcrun_container_t *container, libcrun_context_
       .console_socket_fd = -1,
       .hooks_out_fd = -1,
       .hooks_err_fd = -1,
+      .seccomp_receiver_fd = -1,
     };
 
   if (def->hooks && (def->hooks->prestart_len
@@ -1584,6 +1609,10 @@ libcrun_container_run_internal (libcrun_container_t *container, libcrun_context_
         return crun_error_wrap (err, "open console socket");
       container_args.console_socket_fd = console_socket_fd;
     }
+
+  ret = get_seccomp_receiver_fd (container, &container_args.seccomp_receiver_fd, err);
+  if (UNLIKELY (ret < 0))
+    return ret;
 
   cgroup_mode = libcrun_get_cgroup_mode (err);
   if (cgroup_mode < 0)
@@ -2242,6 +2271,7 @@ libcrun_container_exec (libcrun_context_t *context, const char *id, runtime_spec
   int container_ret_status[2];
   cleanup_close int pipefd0 = -1;
   cleanup_close int pipefd1 = -1;
+  cleanup_close int seccomp_receiver_fd = -1;
   char b;
 
   ret = libcrun_read_container_status (&status, state_root, id, err);
@@ -2269,6 +2299,10 @@ libcrun_container_exec (libcrun_context_t *context, const char *id, runtime_spec
     return ret;
 
   ret = open_seccomp_output (context->id, &seccomp_fd, true, context->state_root, err);
+  if (UNLIKELY (ret < 0))
+    return ret;
+
+  ret = get_seccomp_receiver_fd (container, &seccomp_receiver_fd, err);
   if (UNLIKELY (ret < 0))
     return ret;
 
@@ -2388,10 +2422,11 @@ libcrun_container_exec (libcrun_context_t *context, const char *id, runtime_spec
 
       if (!process->no_new_privileges)
         {
-          ret = libcrun_apply_seccomp (seccomp_fd, seccomp_flags, seccomp_flags_len, err);
+          ret = libcrun_apply_seccomp (seccomp_fd, seccomp_receiver_fd, seccomp_flags, seccomp_flags_len, err);
           if (UNLIKELY (ret < 0))
             return ret;
           close_and_reset (&seccomp_fd);
+          close_and_reset (&seccomp_receiver_fd);
         }
 
       ret = libcrun_container_setgroups (container, err);
@@ -2416,10 +2451,11 @@ libcrun_container_exec (libcrun_context_t *context, const char *id, runtime_spec
 
       if (process->no_new_privileges)
         {
-          ret = libcrun_apply_seccomp (seccomp_fd, seccomp_flags, seccomp_flags_len, err);
+          ret = libcrun_apply_seccomp (seccomp_fd, seccomp_receiver_fd, seccomp_flags, seccomp_flags_len, err);
           if (UNLIKELY (ret < 0))
             return ret;
           close_and_reset (&seccomp_fd);
+          close_and_reset (&seccomp_receiver_fd);
         }
 
       if (process->user)

@@ -32,6 +32,6 @@ enum
   };
 
 int libcrun_generate_seccomp (libcrun_container_t *container, int outfd, unsigned int options, libcrun_error_t *err);
-int libcrun_apply_seccomp (int infd, char **flags, size_t flags_len, libcrun_error_t *err);
+int libcrun_apply_seccomp (int infd, int listener_receiver_fd, char **flags, size_t flags_len, libcrun_error_t *err);
 
 #endif

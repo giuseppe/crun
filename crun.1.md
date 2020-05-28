@@ -294,6 +294,14 @@ Path to the file containing the resources to update.
 
 # Extensions to OCI
 
+## `run.oci.seccomp.receiver=PATH`
+
+If the annotation `run.oci.seccomp.receiver=PATH` is specified, the
+seccomp listener is sent to the UNIX socket listening on the specified
+path.  It can also set with the `RUN_OCI_SECCOMP_RECEIVER` environment variable.
+It is an experimental feature, and the annotation will be removed once
+it is supported in the OCI runtime specs.
+
 ## `run.oci.seccomp_fail_unknown_syscall=1`
 
 If the annotation `run.oci.seccomp_fail_unknown_syscall` is present, then crun

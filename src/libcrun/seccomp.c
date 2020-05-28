@@ -118,6 +118,10 @@ get_seccomp_action (const char *name, int errno_ret, libcrun_error_t *err)
   else if (strcmp (p, "KILL_PROCESS") == 0)
     return SCMP_ACT_KILL_PROCESS;
 #endif
+#ifdef SCMP_ACT_NOTIFY
+  else if (strcmp (p, "NOTIFY") == 0)
+    return SCMP_ACT_NOTIFY;
+#endif
 
  fail:
   crun_make_error (err, 0, "seccomp get action", name);
@@ -144,7 +148,7 @@ cleanup_seccompp (void *p)
 #define cleanup_seccomp __attribute__((cleanup (cleanup_seccompp)))
 
 int
-libcrun_apply_seccomp (int infd, char **seccomp_flags, size_t seccomp_flags_len, libcrun_error_t *err)
+libcrun_apply_seccomp (int infd, int listener_receiver_fd, char **seccomp_flags, size_t seccomp_flags_len, libcrun_error_t *err)
 {
   int ret;
   struct sock_fprog seccomp_filter;
@@ -185,6 +189,15 @@ libcrun_apply_seccomp (int infd, char **seccomp_flags, size_t seccomp_flags_len,
   seccomp_filter.len = len / 8;
   seccomp_filter.filter = (struct sock_filter *) bpf;
 
+  if (listener_receiver_fd >= 0)
+    {
+#ifdef SECCOMP_FILTER_FLAG_NEW_LISTENER
+      flags |= SECCOMP_FILTER_FLAG_NEW_LISTENER;
+#else
+      return crun_make_error (err, 0, "SECCOMP_FILTER_FLAG_NEW_LISTENER not supported");
+#endif
+    }
+
   ret = syscall_seccomp (SECCOMP_SET_MODE_FILTER, flags, &seccomp_filter);
   if (UNLIKELY (ret < 0))
     {
@@ -195,6 +208,13 @@ libcrun_apply_seccomp (int infd, char **seccomp_flags, size_t seccomp_flags_len,
         return crun_make_error (err, errno, "seccomp (SECCOMP_SET_MODE_FILTER)");
     }
 
+  if (listener_receiver_fd >= 0)
+    {
+      int fd = ret;
+      ret = send_fd_to_socket (listener_receiver_fd, fd, err);
+      if (UNLIKELY (ret < 0))
+        return crun_error_wrap (err, "send listener fd `%d` to receiver", fd);
+    }
   return 0;
 }
 
