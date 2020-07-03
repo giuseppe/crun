@@ -384,12 +384,14 @@ they are converted when needed from the cgroup v1 configuration.
 | limit | memory.max | y = x ||
 | swap | memory.swap_max | y = x ||
 | reservation | memory.low | y = x ||
+|---|---|---|---|
 
 ## PIDs controller
 
 | OCI (x) | cgroup 2 value (y) | conversion  |   comment |
 |---|---|---|---|
 | limit | pids.max | y = x ||
+|---|---|---|---|
 
 ## CPU controller
 
@@ -398,6 +400,7 @@ they are converted when needed from the cgroup v1 configuration.
 | shares | cpu.weight | y = (1 + ((x - 2) * 9999) / 262142) | convert from [2-262144] to [1-10000]|
 | period | cpu.max | y = x| period and quota are written together|
 | quota | cpu.max | y = x| period and quota are written together|
+|---|---|---|---|
 
 ## blkio controller
 
@@ -409,6 +412,7 @@ they are converted when needed from the cgroup v1 configuration.
 |wbps|io.max|y=x||
 |riops|io.max|y=x||
 |wiops|io.max|y=x||
+|---|---|---|---|
 
 ## cpuset controller
 
@@ -416,9 +420,11 @@ they are converted when needed from the cgroup v1 configuration.
 |---|---|---|---|
 | cpus | cpuset.cpus | y = x ||
 | mems | cpuset.mems | y = x ||
+|---|---|---|---|
 
 ## hugetlb controller
 
 | OCI (x) | cgroup 2 value (y) | conversion  |   comment |
 |---|---|---|---|
 | <PAGE_SIZE>.limit_in_bytes | hugetlb.<PAGE_SIZE>.max | y = x ||
+|---|---|---|---|
