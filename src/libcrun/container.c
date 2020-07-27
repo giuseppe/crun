@@ -23,6 +23,7 @@
 #include "container.h"
 #include "utils.h"
 #include "seccomp.h"
+#include "seccomp_notify.h"
 #include <stdbool.h>
 #include <argp.h>
 #include <unistd.h>
@@ -41,6 +42,10 @@
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include <grp.h>
+
+# ifdef HAVE_DLOPEN
+# include <dlfcn.h>
+# endif
 
 #ifdef HAVE_SYSTEMD
 # include <systemd/sd-daemon.h>
@@ -1217,7 +1222,10 @@ handle_notify_socket (int notify_socketfd, libcrun_error_t *err)
 }
 
 static int
-wait_for_process (pid_t pid, libcrun_context_t *context, int terminal_fd, int notify_socket, int container_ready_fd, libcrun_error_t *err)
+wait_for_process (pid_t pid, libcrun_context_t *context, int terminal_fd,
+                  int notify_socket, int container_ready_fd,
+                  int seccomp_notify_fd, const char *seccomp_notify_plugins,
+                  libcrun_error_t *err)
 {
   cleanup_close int epollfd = -1;
   cleanup_close int signalfd = -1;
@@ -1227,6 +1235,7 @@ wait_for_process (pid_t pid, libcrun_context_t *context, int terminal_fd, int no
   int levelfds[10];
   int levelfds_len = 0;
   int fds_len = 0;
+  cleanup_seccomp_notify_context struct seccomp_notify_context_s *seccomp_notify_ctx = NULL;
 
   container_exit_code = 0;
 
@@ -1266,6 +1275,31 @@ wait_for_process (pid_t pid, libcrun_context_t *context, int terminal_fd, int no
   if (last_process)
     return container_exit_code;
 
+  if (seccomp_notify_fd >= 0)
+    {
+      cleanup_free char *state_root = NULL;
+      cleanup_free char *oci_config_path = NULL;
+
+      struct libcrun_load_seccomp_notify_conf_s conf;
+      memset (&conf, 0, sizeof conf);
+
+      state_root = libcrun_get_state_directory (context->state_root, context->id);
+      if (UNLIKELY (state_root == NULL))
+        return crun_make_error (err, 0, "cannot get state directory");
+      xasprintf (&oci_config_path, "%s/config.json");
+
+      conf.runtime_root_path = state_root;
+      conf.name = context->id;
+      conf.bundle_path = context->bundle;
+      conf.oci_config_path = oci_config_path;
+
+      ret = libcrun_load_seccomp_notify_plugins (&seccomp_notify_ctx, seccomp_notify_plugins, &conf, err);
+      if (UNLIKELY (ret < 0))
+        return ret;
+
+      fds[fds_len++] = seccomp_notify_fd;
+    }
+
   fds[fds_len++] = signalfd;
   if (notify_socket >= 0)
     fds[fds_len++] = notify_socket;
@@ -1299,6 +1333,12 @@ wait_for_process (pid_t pid, libcrun_context_t *context, int terminal_fd, int no
               ret = copy_from_fd_to_fd (0, terminal_fd, 0, err);
               if (UNLIKELY (ret < 0))
                 return crun_error_wrap (err, "copy to terminal fd");
+            }
+          else if (events[i].data.fd == seccomp_notify_fd)
+            {
+              ret = libcrun_seccomp_notify_plugins (seccomp_notify_ctx, seccomp_notify_fd, err);
+              if (UNLIKELY (ret < 0))
+                return ret;
             }
           else if (events[i].data.fd == terminal_fd)
             {
@@ -1496,11 +1536,27 @@ find_systemd_subgroup (libcrun_container_t *container, int cgroup_mode)
 }
 
 static int
-get_seccomp_receiver_fd (libcrun_container_t *container, int *fd, libcrun_error_t *err)
+get_seccomp_receiver_fd (libcrun_container_t *container, int *fd, int *self_receiver_fd, const char **plugins, libcrun_error_t *err)
 {
   const char *tmp;
 
   *fd = -1;
+  *self_receiver_fd = -1;
+
+  tmp = find_annotation (container, "run.oci.seccomp.plugins");
+  if (tmp)
+    {
+      int fds[2];
+      int ret;
+
+      ret = create_socket_pair (fds, err);
+      if (UNLIKELY (ret < 0))
+        return crun_error_wrap (err, "create terminal socket");
+
+      *fd = fds[0];
+      *self_receiver_fd = fds[1];
+      *plugins = tmp;
+    }
 
   tmp = find_annotation (container, "run.oci.seccomp.receiver");
   if (tmp == NULL)
@@ -1535,6 +1591,9 @@ libcrun_container_run_internal (libcrun_container_t *container, libcrun_context_
   cleanup_close int console_socket_fd = -1;
   cleanup_close int hooks_out_fd = -1;
   cleanup_close int hooks_err_fd = -1;
+  cleanup_close int own_seccomp_receiver_fd = -1;
+  cleanup_close int seccomp_notify_fd = -1;
+  const char *seccomp_notify_plugins = NULL;
   int cgroup_mode, cgroup_manager;
   char created[35];
   uid_t root_uid = -1;
@@ -1602,6 +1661,14 @@ libcrun_container_run_internal (libcrun_container_t *container, libcrun_context_
     }
   container_args.seccomp_fd = seccomp_fd;
 
+  if (seccomp_fd >= 0)
+    {
+      ret = get_seccomp_receiver_fd (container, &container_args.seccomp_receiver_fd,
+                                     &own_seccomp_receiver_fd, &seccomp_notify_plugins, err);
+      if (UNLIKELY (ret < 0))
+        return ret;
+    }
+
   if (context->console_socket)
     {
       console_socket_fd = open_unix_domain_client_socket (context->console_socket, 0, err);
@@ -1609,10 +1676,6 @@ libcrun_container_run_internal (libcrun_container_t *container, libcrun_context_
         return crun_error_wrap (err, "open console socket");
       container_args.console_socket_fd = console_socket_fd;
     }
-
-  ret = get_seccomp_receiver_fd (container, &container_args.seccomp_receiver_fd, err);
-  if (UNLIKELY (ret < 0))
-    return ret;
 
   cgroup_mode = libcrun_get_cgroup_mode (err);
   if (cgroup_mode < 0)
@@ -1761,7 +1824,19 @@ libcrun_container_run_internal (libcrun_container_t *container, libcrun_context_
         return cleanup_watch (context, pid, sync_socket, terminal_fd, err);
     }
 
-  ret = wait_for_process (pid, context, terminal_fd, notify_socket, container_ready_fd, err);
+  /* Let's receive the seccomp notify fd and handle it as part of wait_for_process().  */
+  if (own_seccomp_receiver_fd >= 0)
+    {
+      seccomp_notify_fd = receive_fd_from_socket (own_seccomp_receiver_fd, err);
+      if (UNLIKELY (seccomp_notify_fd < 0))
+        return cleanup_watch (context, pid, sync_socket, terminal_fd, err);
+
+      ret = close_and_reset (&own_seccomp_receiver_fd);
+      if (UNLIKELY (ret < 0))
+        return cleanup_watch (context, pid, sync_socket, terminal_fd, err);
+    }
+
+  ret = wait_for_process (pid, context, terminal_fd, notify_socket, container_ready_fd, seccomp_notify_fd, seccomp_notify_plugins, err);
   if (!context->detach)
     {
       libcrun_error_t tmp_err = NULL;
@@ -2272,6 +2347,9 @@ libcrun_container_exec (libcrun_context_t *context, const char *id, runtime_spec
   cleanup_close int pipefd0 = -1;
   cleanup_close int pipefd1 = -1;
   cleanup_close int seccomp_receiver_fd = -1;
+  cleanup_close int own_seccomp_receiver_fd = -1;
+  cleanup_close int seccomp_notify_fd = -1;
+  const char *seccomp_notify_plugins = NULL;
   char b;
 
   ret = libcrun_read_container_status (&status, state_root, id, err);
@@ -2302,9 +2380,13 @@ libcrun_container_exec (libcrun_context_t *context, const char *id, runtime_spec
   if (UNLIKELY (ret < 0))
     return ret;
 
-  ret = get_seccomp_receiver_fd (container, &seccomp_receiver_fd, err);
-  if (UNLIKELY (ret < 0))
-    return ret;
+  if (seccomp_fd >= 0)
+    {
+      ret = get_seccomp_receiver_fd (container, &seccomp_receiver_fd, &own_seccomp_receiver_fd,
+                                     &seccomp_notify_plugins, err);
+      if (UNLIKELY (ret < 0))
+        return ret;
+    }
 
   /* This must be done before we enter a user namespace.  */
   ret = libcrun_set_rlimits (process->rlimits, process->rlimits_len, err);
@@ -2518,7 +2600,20 @@ libcrun_container_exec (libcrun_context_t *context, const char *id, runtime_spec
   if (b != '0')
     ret = -1;
   else
-    ret = wait_for_process (pid, context, terminal_fd, -1, -1, err);
+    {
+      /* Let's receive the seccomp notify fd and handle it as part of wait_for_process().  */
+      if (own_seccomp_receiver_fd >= 0)
+        {
+          seccomp_notify_fd = receive_fd_from_socket (own_seccomp_receiver_fd, err);
+          if (UNLIKELY (seccomp_notify_fd < 0))
+            return seccomp_notify_fd;
+
+          ret = close_and_reset (&own_seccomp_receiver_fd);
+          if (UNLIKELY (ret < 0))
+            return ret;
+        }
+      ret = wait_for_process (pid, context, terminal_fd, -1, -1, seccomp_notify_fd, seccomp_notify_plugins, err);
+    }
 
   flush_fd_to_err (context, terminal_fd);
   return ret;

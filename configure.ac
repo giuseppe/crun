@@ -115,6 +115,16 @@ AC_COMPILE_IFELSE(
 		 AC_DEFINE([HAVE_FSCONFIG_CMD_CREATE], 1, [Define if FSCONFIG_CMD_CREATE is available])],
 		[AC_MSG_RESULT(no)])
 
+dnl seccomp notify API
+AC_COMPILE_IFELSE(
+	[AC_LANG_SOURCE([[
+			#include <linux/seccomp.h>
+			int cmd = SECCOMP_GET_NOTIF_SIZES;
+		]])],
+		[AC_MSG_RESULT(yes)
+		 AC_DEFINE([HAVE_SECCOMP_GET_NOTIF_SIZES], 1, [Define if SECCOMP_GET_NOTIF_SIZES is available])],
+		[AC_MSG_RESULT(no)])
+
 AC_DEFINE([LIBCRUN_PUBLIC], [__attribute__((visibility("default"))) extern], [LIBCRUN_PUBLIC])
 AC_SUBST([FOUND_LIBS])
 AC_SUBST([CRUN_LDFLAGS])
@@ -128,6 +138,7 @@ if test -z "$GPERF"; then
        AC_MSG_NOTICE(gperf not found - cannot rebuild signal parser code)
 fi
 
+AC_SEARCH_LIBS([dlopen], [dl], [AC_DEFINE([HAVE_DLOPEN], 1, [Define if DLOPEN is available])]], [])
 
 AC_SEARCH_LIBS([argp_parse], [argp], [], [AC_MSG_ERROR([*** argp functions not found - install libargp or argp_standalone])])
 

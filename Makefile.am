@@ -35,7 +35,9 @@ libcrun_SOURCES = src/libcrun/utils.c \
 			src/libcrun/status.c \
 			src/libcrun/terminal.c \
 			src/libcrun/chroot_realpath.c \
-			src/libcrun/signals.c
+			src/libcrun/signals.c \
+			src/libcrun/seccomp_notify.c
+
 
 libcrun_la_SOURCES = $(libcrun_SOURCES)
 libcrun_la_CFLAGS = -I $(abs_top_builddir)/libocispec/src -I $(abs_top_srcdir)/libocispec/src -fvisibility=hidden
@@ -65,7 +67,7 @@ crun_LDFLAGS = $(CRUN_LDFLAGS)
 EXTRA_DIST = COPYING COPYING.libcrun README.md NEWS SECURITY.md rpm/crun.spec.in autogen.sh \
 	src/crun.h src/list.h src/run.h src/delete.h src/kill.h src/pause.h src/unpause.h \
 	src/create.h src/start.h src/state.h src/exec.h src/spec.h src/update.h src/ps.h \
-	src/checkpoint.h src/restore.h \
+	src/checkpoint.h src/restore.h src/libcrun/seccomp_notify.h \
 	src/libcrun/container.h src/libcrun/seccomp.h src/libcrun/ebpf.h src/libcrun/cgroup.h \
 	src/libcrun/linux.h src/libcrun/utils.h src/libcrun/error.h src/libcrun/criu.h \
 	src/libcrun/status.h src/libcrun/terminal.h \

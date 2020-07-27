@@ -211,6 +211,7 @@ libcrun_apply_seccomp (int infd, int listener_receiver_fd, char **seccomp_flags,
   if (listener_receiver_fd >= 0)
     {
       int fd = ret;
+
       ret = send_fd_to_socket (listener_receiver_fd, fd, err);
       if (UNLIKELY (ret < 0))
         return crun_error_wrap (err, "send listener fd `%d` to receiver", fd);
