@@ -1735,8 +1735,9 @@ libcrun_container_run_internal (libcrun_container_t *container, libcrun_context_
   ret = wait_for_process (pid, context, terminal_fd, notify_socket, container_ready_fd, err);
   if (!context->detach)
     {
-      cleanup_watch (context, 0, sync_socket, terminal_fd, err);
-      crun_error_release (err);
+      libcrun_error_t tmp_err = NULL;
+      cleanup_watch (context, 0, sync_socket, terminal_fd, &tmp_err);
+      crun_error_release (&tmp_err);
     }
 
   return ret;
