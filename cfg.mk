@@ -21,6 +21,6 @@ local-checks-to-skip = \
 show-vc-list-except:
 	@$(VC_LIST_EXCEPT)
 
-VC_LIST_ALWAYS_EXCLUDE_REGEX = ^ABOUT-NLS|maint.mk|git.mk|tests.*|COPYING$$
+VC_LIST_ALWAYS_EXCLUDE_REGEX = ^ABOUT-NLS|maint.mk|git.mk|tests.*|COPYING|contrib/.*$$
 
 export gl_public_submodule_commit=
