@@ -1,0 +1,18 @@
+[package]
+name = "seccomp-watcher"
+version = "0.1.0"
+authors = ["Giuseppe Scrivano <giuseppe@scrivano.org>"]
+edition = "2018"
+
+[dependencies]
+libc = { version = "0.2.14", default-features = false }
+nc = "0.4.7"
+
+[lib]
+name = "seccompwatcher_rs"
+path = "src/seccompwatcher.rs"
+crate-type = ["dylib"]
+
+[profile.release]
+panic = "abort"
+lto = true
