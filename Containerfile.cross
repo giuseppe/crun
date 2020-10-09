@@ -1,0 +1,23 @@
+FROM --platform=$BUILDPLATFORM debian:10 AS crun
+RUN apt-get update && \
+  apt-get install --no-install-recommends -y \
+  git ca-certificates make automake autoconf pkgconf file curl go-md2man build-essential libtool \
+  python3 ninja-build meson gperf cmake gettext
+RUN curl -o /cross.sh https://raw.githubusercontent.com/tonistiigi/binfmt/18c3d40ae2e3485e4de5b453e8460d6872b24d6b/binfmt/scripts/cross.sh && chmod +x /cross.sh
+COPY . /crun
+ARG TARGETPLATFORM
+RUN /cross.sh install gcc libsystemd-dev libcap-dev libseccomp-dev libyajl-dev libmount-dev | sh
+RUN git clone --depth 1 https://github.com/systemd/systemd.git \
+    && (mkdir systemd/build; cd systemd/build; printf "[binaries]\nc = '$(/cross.sh cross-prefix)-gcc'\ncpp = '$(/cross.sh cross-prefix)-g++'\nar = '$(/cross.sh cross-prefix)-ar'\npkgconfig = '/usr/bin/pkg-config'\n[host_machine]\nsystem = 'linux'\ncpu = '$(/cross.sh arch)'\nendian = ''\ncpu_family=''\n" > cross-compile.txt && export PKG_CONFIG_LIBDIR=/usr/lib/$(/cross.sh cross-prefix)/pkgconfig && meson -Dstatic-libsystemd=true -Dselinux=false --cross-file cross-compile.txt ..; ninja version.h; ninja libsystemd.a; cp libsystemd.a /usr/lib)
+WORKDIR /crun
+RUN ./autogen.sh \
+    && ./configure CC=$(/cross.sh cross-prefix)-gcc PKG_CONFIG_LIBDIR=/usr/lib/$(/cross.sh cross-prefix)/pkgconfig LD=$(/cross.sh cross-prefix)-ld CFLAGS="-O3" CRUN_LDFLAGS=-all-static LDFLAGS="-static-libgcc -static" LIBS="/usr/lib/libsystemd.a /usr/lib/$(/cross.sh cross-prefix)/libyajl_s.a /usr/lib/$(/cross.sh cross-prefix)/libcap.a /usr/lib/$(/cross.sh cross-prefix)/libseccomp.a /usr/lib/$(/cross.sh cross-prefix)/librt.a /usr/lib/$(/cross.sh cross-prefix)/libpthread.a /usr/lib/$(/cross.sh cross-prefix)/libc.a" --enable-static \
+    && make V=1 -C libocispec \
+    && make V=1 git-version.h \
+    && make V=1 crun \
+    && mkdir /out \
+    && cp crun /out \
+    && file /out/crun | grep "statically linked"
+
+FROM scratch
+COPY --from=crun /out/crun /crun

@@ -1,0 +1,97 @@
+name: Release
+on:
+  push:
+    tags:
+    - 'test-cross-*'
+    - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: "Register QEMU to /proc/sys/fs/binfmt_misc"
+      run: docker run --rm --privileged linuxkit/binfmt:v0.8
+    - name: "Fetch buildx binary"
+      run: |
+        wget -O buildx https://github.com/docker/buildx/releases/download/v0.4.1/buildx-v0.4.1.linux-amd64
+        chmod +x buildx
+    - name: "Initialize buildx"
+      run: |
+        ./buildx create --name cross --platform=amd64,arm,arm64,s390x,ppc64le  --use
+        ./buildx inspect --bootstrap
+    - name: "Build binaries from Containerfile.cross"
+      run: ./buildx build -o /tmp --platform=amd64,arm64,arm,s390x,ppc64le -f Containerfile.cross .
+    - name: "Create /tmp/artifact"
+      run: |
+        mkdir -p /tmp/artifact
+        mv /tmp/linux_amd64/crun /tmp/artifact/crun-x86_64
+        mv /tmp/linux_arm64/crun /tmp/artifact/crun-aarch64
+        mv /tmp/linux_arm_v7/crun /tmp/artifact/crun-armv7l
+        mv /tmp/linux_s390x/crun /tmp/artifact/crun-s390x
+        mv /tmp/linux_ppc64le/crun /tmp/artifact/crun-ppc64le
+    - name: "SHA256SUMS"
+      run: (cd /tmp/artifact; sha256sum *) | tee /tmp/SHA256SUMS
+    - name: "Create release"
+      uses: actions/create-release@v1
+      id: create_release
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref }}
+        release_name: ${{ github.ref }}
+        draft: true
+    - name: "Upload crun-x86_64"
+      uses: actions/upload-release-asset@v1.0.2
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: /tmp/artifact/crun-x86_64
+        asset_name: crun-x86_64
+        asset_content_type: application/octet-stream
+    - name: "Upload crun-aarch64"
+      uses: actions/upload-release-asset@v1.0.2
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: /tmp/artifact/crun-aarch64
+        asset_name: crun-aarch64
+        asset_content_type: application/octet-stream
+    - name: "Upload crun-armv7l"
+      uses: actions/upload-release-asset@v1.0.2
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: /tmp/artifact/crun-armv7l
+        asset_name: crun-armv7l
+        asset_content_type: application/octet-stream
+    - name: "Upload crun-s390x"
+      uses: actions/upload-release-asset@v1.0.2
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: /tmp/artifact/crun-s390x
+        asset_name: crun-s390x
+        asset_content_type: application/octet-stream
+    - name: "Upload crun-ppc64le"
+      uses: actions/upload-release-asset@v1.0.2
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: /tmp/artifact/crun-ppc64le
+        asset_name: crun-ppc64le
+        asset_content_type: application/octet-stream
+    - name: "Upload SHA256SUMS"
+      uses: actions/upload-release-asset@v1.0.2
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: /tmp/SHA256SUMS
+        asset_name: SHA256SUMS
+        asset_content_type: text/plain
