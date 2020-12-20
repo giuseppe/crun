@@ -1,0 +1,127 @@
+name: Test
+
+on: [push, pull_request]
+
+jobs:
+  build_job:
+    runs-on: ubuntu-latest
+    name: Build on ${{ matrix.arch }} with ${{ matrix.configureFlags }}
+
+    strategy:
+      matrix:
+        include:
+          #- arch: armv7
+          #  distro: ubuntu20.04
+          - arch: aarch64
+            distro: ubuntu20.04
+          - arch: s390x
+            distro: ubuntu20.04
+          - arch: ppc64le
+            distro: ubuntu20.04
+    steps:
+      - uses: actions/checkout@v2.1.0
+      - uses: uraimo/run-on-arch-action@v2.0.5
+        name: Build
+        id: build
+        with:
+          arch: ${{ matrix.arch }}
+          distro: ${{ matrix.distro }}
+
+          githubToken: ${{ github.token }}
+
+          setup: |
+            git submodule update --init --recursive
+
+          install: |
+            apt-get update -q -y
+            apt-get install -q -y automake libtool autotools-dev libseccomp-dev git make libcap-dev cmake pkg-config gcc wget go-md2man libsystemd-dev gperf clang-format libyajl-dev
+
+          run: |
+            ./autogen.sh
+            ./configure CFLAGS='-Wall -Werror'
+            make -j $(nproc) -C libocispec libocispec.la
+            make git-version.h
+            make -j $(nproc) libcrun.la
+            make -j $(nproc) crun
+
+  Test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - test: disable-systemd
+          - test: check
+          - test: podman
+          - test: containerd
+          - test: oci-validation
+          - test: alpine-build
+          - test: clang-format
+          - test: checkpoint-restore
+    steps:
+    - name: checkout
+      uses: actions/checkout@v2
+
+    - name: update submodules
+      run: |
+        git submodule update --init --recursive
+
+    - name: install dependencies
+      run: |
+        sudo apt-get update -q -y
+        sudo apt-get install -q -y software-properties-common
+
+        sudo add-apt-repository -y ppa:criu/ppa
+        sudo apt-get update -q -y
+
+        sudo apt-get install -q -y criu automake libtool autotools-dev libseccomp-dev git make libcap-dev cmake pkg-config gcc wget go-md2man libsystemd-dev gperf clang-format libyajl-dev docker.io containerd runc
+
+        sudo systemctl unmask docker
+        sudo systemctl start docker
+
+    - name: run autogen.sh
+      run: |
+        ./autogen.sh
+
+    - name: run test
+      run: |
+        case "${{ matrix.test }}" in
+            disable-systemd)
+                ./configure --disable-systemd
+                make
+            ;;
+            check)
+                ./configure
+                make
+                make syntax-check
+                sudo make check
+            ;;
+            podman)
+                sudo docker build -t crun-podman tests/podman
+                sudo docker run --privileged --rm -v /sys/fs/cgroup:/sys/fs/cgroup:rw,rslave -v ${PWD}:/crun crun-podman
+                ;;
+            containerd)
+                sudo mkdir -p /var/lib/var-containerd
+                sudo docker build -t crun-containerd tests/containerd
+                sudo docker run --privileged --net host --rm -v /tmp:/tmp:rw -v /var/lib/var-containerd:/var/lib:rw -v /sys:/sys:rw,rslave -v ${PWD}:/crun crun-containerd
+                ;;
+            oci-validation)
+                sudo docker build -t crun-oci-validation tests/oci-validation
+                sudo docker run --privileged --rm -v /sys/fs/cgroup:/sys/fs/cgroup:rw,rslave -v ${PWD}:/crun crun-oci-validation
+            ;;
+            alpine-build)
+                sudo docker build -t crun-alpine-build tests/alpine-build
+                sudo docker run --privileged --rm -v /sys/fs/cgroup:/sys/fs/cgroup:rw,rslave -v $(pwd):/crun crun-alpine-build
+            ;;
+            clang-format)
+                ./configure
+                sudo docker build -t crun-clang-format tests/clang-format
+                sudo docker run --rm -w /crun -v ${PWD}:/crun crun-clang-format make clang-format
+            ;;
+            checkpoint-restore)
+                ./autogen.sh
+                ./configure
+                make -j $(nproc)
+                sudo python3 tests/test_checkpoint_restore.py
+            ;;
+        esac
