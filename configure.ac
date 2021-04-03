@@ -130,6 +130,20 @@ AS_IF([test "x$enable_criu" != "xno"], [
 	    ])
 ], [AC_MSG_NOTICE([CRIU support disabled per user request])])
 
+AC_SEARCH_LIBS([bpf_prog_load_xattr], [bpf], [AC_DEFINE([HAVE_BPF_PROG_LOAD_XATTR], 1, [Define if bpf_prog_load_xattr is available])], [])
+
+AC_MSG_CHECKING([for BPF_PROG_TYPE_SECCOMP])
+AC_COMPILE_IFELSE(
+	[AC_LANG_SOURCE([[
+			#include <linux/bpf.h>
+			int cmd = BPF_PROG_TYPE_SECCOMP;
+		]])],
+		[AC_MSG_RESULT(yes)
+		 AC_DEFINE([HAVE_BPF_PROG_TYPE_SECCOMP], 1, [Define if HAVE_BPF_PROG_TYPE_SECCOMP is available])],
+		[AC_MSG_RESULT(no)])
+
+AC_SEARCH_LIBS([argp_parse], [argp], [], [AC_MSG_ERROR([*** argp functions not found - install libargp or argp_standalone])])
+
 FOUND_LIBS=$LIBS
 LIBS=""
 
@@ -165,8 +179,6 @@ AC_CHECK_TOOL(GPERF, gperf)
 if test -z "$GPERF"; then
        AC_MSG_NOTICE(gperf not found - cannot rebuild signal parser code)
 fi
-
-AC_SEARCH_LIBS([argp_parse], [argp], [], [AC_MSG_ERROR([*** argp functions not found - install libargp or argp_standalone])])
 
 AM_CONDITIONAL([PYTHON_BINDINGS], [test "x$with_python_bindings" = "xyes"])
 AM_CONDITIONAL([CRIU_SUPPORT], [test "x$have_criu" = "xyes"])

@@ -371,12 +371,21 @@ are available on the `ld.so(8)` man page.
 If the annotation `run.oci.seccomp_fail_unknown_syscall` is present, then crun
 will fail when an unknown syscall is encountered in the seccomp configuration.
 
-## `run.oci.seccomp_bpf_data=PATH`
+## `run.oci.seccomp_bpf_data=DATA`
 
 If the annotation `run.oci.seccomp_bpf_data` is present, then crun
 ignores the seccomp section in the OCI configuration file and use the specified data
 as the raw data to the `seccomp(SECCOMP_SET_MODE_FILTER)` syscall.
 The data must be encoded in base64.
+
+It is an experimental feature, and the annotation will be removed once
+it is supported in the OCI runtime specs.
+
+## `run.oci.seccomp_ebpf_file=PATH`
+
+If the annotation `run.oci.seccomp_ebpf_file` is present, then crun
+ignores the seccomp section in the OCI configuration file and use the specified file
+as the raw eBPF data to the `seccomp(SECCOMP_SET_MODE_FILTER)` syscall.
 
 It is an experimental feature, and the annotation will be removed once
 it is supported in the OCI runtime specs.

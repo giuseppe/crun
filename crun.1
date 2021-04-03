@@ -467,12 +467,22 @@ are available on the \fB\fCld.so(8)\fR man page.
 If the annotation \fB\fCrun.oci.seccomp\_fail\_unknown\_syscall\fR is present, then crun
 will fail when an unknown syscall is encountered in the seccomp configuration.
 
-.SH \fB\fCrun.oci.seccomp\_bpf\_data=PATH\fR
+.SH \fB\fCrun.oci.seccomp\_bpf\_data=DATA\fR
 .PP
 If the annotation \fB\fCrun.oci.seccomp\_bpf\_data\fR is present, then crun
 ignores the seccomp section in the OCI configuration file and use the specified data
 as the raw data to the \fB\fCseccomp(SECCOMP\_SET\_MODE\_FILTER)\fR syscall.
 The data must be encoded in base64.
+
+.PP
+It is an experimental feature, and the annotation will be removed once
+it is supported in the OCI runtime specs.
+
+.SH \fB\fCrun.oci.seccomp\_ebpf\_file=PATH\fR
+.PP
+If the annotation \fB\fCrun.oci.seccomp\_ebpf\_file\fR is present, then crun
+ignores the seccomp section in the OCI configuration file and use the specified file
+as the raw eBPF data to the \fB\fCseccomp(SECCOMP\_SET\_MODE\_FILTER)\fR syscall.
 
 .PP
 It is an experimental feature, and the annotation will be removed once

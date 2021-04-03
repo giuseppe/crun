@@ -80,6 +80,7 @@ struct container_entrypoint_s
   int seccomp_fd;
   int seccomp_receiver_fd;
   int console_socket_fd;
+  int seccomp_ebpf_fd;
 
   int hooks_out_fd;
   int hooks_err_fd;
@@ -1246,13 +1247,20 @@ container_init_setup (void *args, pid_t own_pid, char *notify_socket, int sync_s
             return ret;
         }
 
-      ret = libcrun_apply_seccomp (entrypoint_args->seccomp_fd, entrypoint_args->seccomp_receiver_fd,
-                                   seccomp_fd_payload, seccomp_fd_payload_len, seccomp_flags, seccomp_flags_len, err);
+      ret = libcrun_apply_seccomp (entrypoint_args->seccomp_fd,
+                                   entrypoint_args->seccomp_ebpf_fd,
+                                   entrypoint_args->seccomp_receiver_fd,
+                                   seccomp_fd_payload,
+                                   seccomp_fd_payload_len,
+                                   seccomp_flags,
+                                   seccomp_flags_len,
+                                   err);
       if (UNLIKELY (ret < 0))
         return ret;
 
       close_and_reset (&entrypoint_args->seccomp_fd);
       close_and_reset (&entrypoint_args->seccomp_receiver_fd);
+      close_and_reset (&entrypoint_args->seccomp_ebpf_fd);
     }
 
   if (entrypoint_args->container->use_intermediate_userns)
@@ -1397,13 +1405,19 @@ container_init (void *args, char *notify_socket, int sync_socket, libcrun_error_
             return ret;
         }
 
-      ret = libcrun_apply_seccomp (entrypoint_args->seccomp_fd, entrypoint_args->seccomp_receiver_fd,
-                                   seccomp_fd_payload, seccomp_fd_payload_len, seccomp_flags,
-                                   seccomp_flags_len, err);
+      ret = libcrun_apply_seccomp (entrypoint_args->seccomp_fd,
+                                   entrypoint_args->seccomp_ebpf_fd,
+                                   entrypoint_args->seccomp_receiver_fd,
+                                   seccomp_fd_payload,
+                                   seccomp_fd_payload_len,
+                                   seccomp_flags,
+                                   seccomp_flags_len,
+                                   err);
       if (UNLIKELY (ret < 0))
         return ret;
       close_and_reset (&entrypoint_args->seccomp_fd);
       close_and_reset (&entrypoint_args->seccomp_receiver_fd);
+      close_and_reset (&entrypoint_args->seccomp_ebpf_fd);
     }
 
   if (UNLIKELY (def->process == NULL))
@@ -2155,6 +2169,7 @@ libcrun_container_run_internal (libcrun_container_t *container, libcrun_context_
   cleanup_close int hooks_err_fd = -1;
   cleanup_close int own_seccomp_receiver_fd = -1;
   cleanup_close int seccomp_notify_fd = -1;
+  const char *seccomp_ebpf_data;
   const char *seccomp_notify_plugins = NULL;
   int cgroup_mode, cgroup_manager;
   char created[35];
@@ -2168,6 +2183,8 @@ libcrun_container_run_internal (libcrun_container_t *container, libcrun_context_
     .hooks_out_fd = -1,
     .hooks_err_fd = -1,
     .seccomp_receiver_fd = -1,
+    .seccomp_ebpf_fd = -1,
+    .seccomp_fd = -1,
     .exec_func = context->exec_func,
     .exec_func_arg = context->exec_func_arg,
   };
@@ -2214,13 +2231,22 @@ libcrun_container_run_internal (libcrun_container_t *container, libcrun_context_
   if (UNLIKELY (ret < 0))
     return ret;
 
-  if (def->linux && (def->linux->seccomp || find_annotation (container, "run.oci.seccomp_bpf_data")))
+  if ((def->linux && def->linux->seccomp)
+      || find_annotation (container, "run.oci.seccomp_bpf_data"))
     {
       ret = open_seccomp_output (context->id, &seccomp_fd, false, context->state_root, err);
       if (UNLIKELY (ret < 0))
         return ret;
     }
-  container_args.seccomp_fd = seccomp_fd;
+
+  if ((seccomp_ebpf_data = find_annotation (container, "run.oci.seccomp_ebpf_file")))
+    {
+      ret = seccomp_open_ebpf_data (seccomp_ebpf_data, err);
+      if (UNLIKELY (ret < 0))
+        return ret;
+
+      container_args.seccomp_ebpf_fd = ret;
+    }
 
   if (seccomp_fd >= 0)
     {
@@ -2992,6 +3018,8 @@ libcrun_container_exec (libcrun_context_t *context, const char *id, runtime_spec
   cleanup_close int seccomp_receiver_fd = -1;
   cleanup_close int own_seccomp_receiver_fd = -1;
   cleanup_close int seccomp_notify_fd = -1;
+  cleanup_close int seccomp_ebpf_fd = -1;
+  const char *seccomp_ebpf_data;
   const char *seccomp_notify_plugins = NULL;
   char b;
 
@@ -3033,6 +3061,14 @@ libcrun_container_exec (libcrun_context_t *context, const char *id, runtime_spec
                                      err);
       if (UNLIKELY (ret < 0))
         return ret;
+    }
+  if ((seccomp_ebpf_data = find_annotation (container, "run.oci.seccomp_ebpf_file")))
+    {
+      ret = seccomp_open_ebpf_data (seccomp_ebpf_data, err);
+      if (UNLIKELY (ret < 0))
+        return ret;
+
+      seccomp_ebpf_fd = ret;
     }
 
   /* This must be done before we enter a user namespace.  */
@@ -3169,12 +3205,19 @@ libcrun_container_exec (libcrun_context_t *context, const char *id, runtime_spec
                 return ret;
             }
 
-          ret = libcrun_apply_seccomp (seccomp_fd, seccomp_receiver_fd, seccomp_fd_payload,
-                                       seccomp_fd_payload_len, seccomp_flags, seccomp_flags_len, err);
+          ret = libcrun_apply_seccomp (seccomp_fd,
+                                       seccomp_ebpf_fd,
+                                       seccomp_receiver_fd,
+                                       seccomp_fd_payload,
+                                       seccomp_fd_payload_len,
+                                       seccomp_flags,
+                                       seccomp_flags_len,
+                                       err);
           if (UNLIKELY (ret < 0))
             return ret;
           close_and_reset (&seccomp_fd);
           close_and_reset (&seccomp_receiver_fd);
+          close_and_reset (&seccomp_ebpf_fd);
         }
 
       ret = libcrun_container_setgroups (container, err);
@@ -3204,13 +3247,20 @@ libcrun_container_exec (libcrun_context_t *context, const char *id, runtime_spec
               if (UNLIKELY (ret < 0))
                 return ret;
             }
-          ret = libcrun_apply_seccomp (seccomp_fd, seccomp_receiver_fd, seccomp_fd_payload,
-                                       seccomp_fd_payload_len, seccomp_flags, seccomp_flags_len, err);
+          ret = libcrun_apply_seccomp (seccomp_fd,
+                                       seccomp_ebpf_fd,
+                                       seccomp_receiver_fd,
+                                       seccomp_fd_payload,
+                                       seccomp_fd_payload_len,
+                                       seccomp_flags,
+                                       seccomp_flags_len,
+                                       err);
           if (UNLIKELY (ret < 0))
             return ret;
 
           close_and_reset (&seccomp_fd);
           close_and_reset (&seccomp_receiver_fd);
+          close_and_reset (&seccomp_ebpf_fd);
         }
 
       if (process->user)

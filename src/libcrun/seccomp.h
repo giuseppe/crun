@@ -32,7 +32,8 @@ enum
 };
 
 int libcrun_generate_seccomp (libcrun_container_t *container, int outfd, unsigned int options, libcrun_error_t *err);
-int libcrun_apply_seccomp (int infd, int listener_receiver_fd, const char *receiver_fd_payload,
+int libcrun_apply_seccomp (int infd, int ebpf_fd, int listener_receiver_fd, const char *receiver_fd_payload,
                            size_t receiver_fd_payload_len, char **flags, size_t flags_len, libcrun_error_t *err);
+int seccomp_open_ebpf_data (const char *file, libcrun_error_t *err);
 
 #endif

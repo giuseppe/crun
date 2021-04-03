@@ -34,7 +34,10 @@
 #include <sys/sysmacros.h>
 #include <sys/types.h>
 #include <sys/stat.h>
-
+#ifdef HAVE_BPF_PROG_LOAD_XATTR
+#  include <bpf/libbpf.h>
+#  include <linux/bpf.h>
+#endif
 #ifdef HAVE_SECCOMP
 #  include <seccomp.h>
 #endif
@@ -65,6 +68,10 @@
 
 #ifndef SECCOMP_FILTER_FLAG_SPEC_ALLOW
 #  define SECCOMP_FILTER_FLAG_SPEC_ALLOW (1UL << 2)
+#endif
+
+#ifndef SECCOMP_FILTER_FLAG_EXTENDED
+#  define SECCOMP_FILTER_FLAG_EXTENDED (1UL << 5)
 #endif
 
 static int
@@ -168,22 +175,13 @@ cleanup_seccompp (void *p)
 #define cleanup_seccomp __attribute__ ((cleanup (cleanup_seccompp)))
 
 int
-libcrun_apply_seccomp (int infd, int listener_receiver_fd, const char *receiver_fd_payload,
+libcrun_apply_seccomp (int infd, int ebpf_fd, int listener_receiver_fd, const char *receiver_fd_payload,
                        size_t receiver_fd_payload_len, char **seccomp_flags, size_t seccomp_flags_len,
                        libcrun_error_t *err)
 {
 #ifdef HAVE_SECCOMP
   int ret;
-  struct sock_fprog seccomp_filter;
-  cleanup_free char *bpf = NULL;
   unsigned int flags = 0;
-  size_t len;
-
-  if (infd < 0)
-    return 0;
-
-  if (UNLIKELY (lseek (infd, 0, SEEK_SET) == (off_t) -1))
-    return crun_make_error (err, errno, "lseek");
 
   /* if no seccomp flag was specified use a sane default.  */
   if (seccomp_flags == NULL)
@@ -199,17 +197,15 @@ libcrun_apply_seccomp (int infd, int listener_receiver_fd, const char *receiver_
             flags |= SECCOMP_FILTER_FLAG_SPEC_ALLOW;
           else if (strcmp (seccomp_flags[i], "SECCOMP_FILTER_FLAG_LOG") == 0)
             flags |= SECCOMP_FILTER_FLAG_LOG;
+          else if (strcmp (seccomp_flags[i], "SECCOMP_FILTER_FLAG_EXTENDED") == 0)
+            flags |= SECCOMP_FILTER_FLAG_EXTENDED;
           else
             return crun_make_error (err, 0, "unknown seccomp option %s", seccomp_flags[i]);
         }
     }
 
-  ret = read_all_fd (infd, "seccomp.bpf", &bpf, &len, err);
-  if (UNLIKELY (ret < 0))
-    return ret;
-
-  seccomp_filter.len = len / 8;
-  seccomp_filter.filter = (struct sock_filter *) bpf;
+  if (ebpf_fd >= 0)
+    flags |= SECCOMP_FILTER_FLAG_EXTENDED;
 
   if (listener_receiver_fd >= 0)
     {
@@ -220,14 +216,45 @@ libcrun_apply_seccomp (int infd, int listener_receiver_fd, const char *receiver_
 #  endif
     }
 
-  ret = syscall_seccomp (SECCOMP_SET_MODE_FILTER, flags, &seccomp_filter);
-  if (UNLIKELY (ret < 0))
+  if (flags & SECCOMP_FILTER_FLAG_EXTENDED)
     {
-      /* If any of the flags is not supported, try again without specifying them:  */
-      if (errno == EINVAL)
-        ret = syscall_seccomp (SECCOMP_SET_MODE_FILTER, 0, &seccomp_filter);
+#  if HAVE_EBPF
+      ret = syscall_seccomp (SECCOMP_SET_MODE_FILTER, flags, &ebpf_fd);
+#  else
+      errno = ENOTSUP;
+      ret = -1;
+#  endif
       if (UNLIKELY (ret < 0))
         return crun_make_error (err, errno, "seccomp (SECCOMP_SET_MODE_FILTER)");
+    }
+  else
+    {
+      struct sock_fprog seccomp_filter;
+      cleanup_free char *bpf = NULL;
+      size_t len;
+
+      if (infd < 0)
+        return 0;
+
+      if (UNLIKELY (lseek (infd, 0, SEEK_SET) == (off_t) -1))
+        return crun_make_error (err, errno, "lseek");
+
+      ret = read_all_fd (infd, "seccomp.bpf", &bpf, &len, err);
+      if (UNLIKELY (ret < 0))
+        return ret;
+
+      seccomp_filter.len = len / 8;
+      seccomp_filter.filter = (struct sock_filter *) bpf;
+
+      ret = syscall_seccomp (SECCOMP_SET_MODE_FILTER, flags, &seccomp_filter);
+      if (UNLIKELY (ret < 0))
+        {
+          /* If any of the flags is not supported, try again without specifying them:  */
+          if (errno == EINVAL)
+            ret = syscall_seccomp (SECCOMP_SET_MODE_FILTER, 0, &seccomp_filter);
+          if (UNLIKELY (ret < 0))
+            return crun_make_error (err, errno, "seccomp (SECCOMP_SET_MODE_FILTER)");
+        }
     }
 
   if (listener_receiver_fd >= 0)
@@ -423,5 +450,43 @@ libcrun_generate_seccomp (libcrun_container_t *container, int outfd, unsigned in
   return 0;
 #else
   return 0;
+#endif
+}
+
+int
+seccomp_open_ebpf_data (const char *file, libcrun_error_t *err)
+{
+#if defined(HAVE_BPF_PROG_LOAD_XATTR) && defined(HAVE_BPF_PROG_TYPE_SECCOMP)
+  struct bpf_prog_load_attr prog_load_attr = {
+    .prog_type = BPF_PROG_TYPE_SECCOMP,
+  };
+  struct bpf_object *obj;
+  int dup_fd = -1;
+  int prog_fd;
+  int ret;
+
+  prog_load_attr.file = file;
+
+  ret = bpf_prog_load_xattr (&prog_load_attr, &obj, &prog_fd);
+  if (UNLIKELY (ret < 0))
+    return crun_make_error (err, -ret, "bpf_prog_load_xattr");
+
+  dup_fd = dup (prog_fd);
+  if (UNLIKELY (dup_fd < 0))
+    {
+      bpf_object__unload (obj);
+      return crun_make_error (err, errno, "dup");
+    }
+
+  ret = bpf_object__unload (obj);
+  if (UNLIKELY (ret < 0))
+    {
+      close (dup_fd);
+      return crun_make_error (err, -ret, "bpf_prog_load_xattr");
+    }
+
+  return dup_fd;
+#else
+  return crun_make_error (err, ENOTSUP, "seccomp eBPF");
 #endif
 }
