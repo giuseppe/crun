@@ -2170,7 +2170,7 @@ libcrun_cgroup_read_pids (struct libcrun_cgroup_status *status, bool recurse, pi
 }
 
 int
-libcrun_cgroup_killall_signal (struct libcrun_cgroup_status *cgroup_status, int signal, libcrun_error_t *err)
+libcrun_cgroup_killall (struct libcrun_cgroup_status *cgroup_status, int signal, libcrun_error_t *err)
 {
   return cgroup_killall (cgroup_status->path, signal, err);
 }
@@ -2247,12 +2247,6 @@ rmdir_all (const char *path)
     return ret;
 
   return rmdir (path);
-}
-
-int
-libcrun_cgroup_killall (struct libcrun_cgroup_status *cgroup_status, libcrun_error_t *err)
-{
-  return libcrun_cgroup_killall_signal (cgroup_status, SIGKILL, err);
 }
 
 static int

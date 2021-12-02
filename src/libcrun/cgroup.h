@@ -75,9 +75,7 @@ cgroup_status_freep (struct libcrun_cgroup_status **p)
 
 /* Operations on the cgroup.  */
 
-int libcrun_cgroup_killall_signal (struct libcrun_cgroup_status *cgroup_status, int signal, libcrun_error_t *err);
-
-int libcrun_cgroup_killall (struct libcrun_cgroup_status *cgroup_status, libcrun_error_t *err);
+int libcrun_cgroup_killall (struct libcrun_cgroup_status *cgroup_status, int signal, libcrun_error_t *err);
 
 int libcrun_cgroup_has_oom (struct libcrun_cgroup_status *status, libcrun_error_t *err);
 

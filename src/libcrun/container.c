@@ -2062,7 +2062,7 @@ container_delete_internal (libcrun_context_t *context, runtime_spec_schema_confi
 
               cgroup_status = libcrun_cgroup_make_status (&status);
 
-              ret = libcrun_cgroup_killall_signal (cgroup_status, SIGKILL, err);
+              ret = libcrun_cgroup_killall (cgroup_status, SIGKILL, err);
               if (UNLIKELY (ret < 0))
                 return 0;
             }
@@ -2124,7 +2124,7 @@ libcrun_container_kill_all (libcrun_context_t *context, const char *id, int sign
 
   cgroup_status = libcrun_cgroup_make_status (&status);
 
-  ret = libcrun_cgroup_killall_signal (cgroup_status, signal, err);
+  ret = libcrun_cgroup_killall (cgroup_status, signal, err);
   if (UNLIKELY (ret < 0))
     return ret;
   return 0;
