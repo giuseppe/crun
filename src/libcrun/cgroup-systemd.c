@@ -679,7 +679,7 @@ enter_systemd_cgroup_scope (runtime_spec_schema_config_linux_resources *resource
       sd_err = sd_bus_message_append (m, "(sv)", boolean_opts[i], "b", 1);
       if (UNLIKELY (sd_err < 0))
         {
-          ret = crun_make_error (err, -sd_err, "sd-bus message append %s", boolean_opts[i]);
+          ret = crun_make_error (err, -sd_err, "sd-bus message append `%s`", boolean_opts[i]);
           goto exit;
         }
     }

@@ -1146,7 +1146,7 @@ read_pids_cgroup (int dfd, bool recurse, pid_t **pids, size_t *n_pids, size_t *a
 
           nfd = openat (dirfd (dir), de->d_name, O_DIRECTORY | O_CLOEXEC);
           if (UNLIKELY (nfd < 0))
-            return crun_make_error (err, errno, "open cgroup directory %s", de->d_name);
+            return crun_make_error (err, errno, "open cgroup directory `%s`", de->d_name);
           ret = read_pids_cgroup (nfd, recurse, pids, n_pids, allocated, err);
           if (UNLIKELY (ret < 0))
             return ret;
@@ -1192,7 +1192,7 @@ libcrun_cgroup_read_pids_from_path (const char *path, bool recurse, pid_t **pids
 
   dirfd = open (cgroup_path, O_DIRECTORY | O_CLOEXEC);
   if (dirfd < 0)
-    return crun_make_error (err, errno, "open %s", cgroup_path);
+    return crun_make_error (err, errno, "open `%s`", cgroup_path);
 
   n_pids = 0;
   allocated = 0;
@@ -2356,7 +2356,7 @@ update_cgroup_v1_resources (runtime_spec_schema_config_linux_resources *resource
 
       dirfd_blkio = open (path_to_blkio, O_DIRECTORY | O_RDONLY);
       if (UNLIKELY (dirfd_blkio < 0))
-        return crun_make_error (err, errno, "open %s", path_to_blkio);
+        return crun_make_error (err, errno, "open `%s`", path_to_blkio);
 
       ret = write_blkio_resources (dirfd_blkio, false, blkio, err);
       if (UNLIKELY (ret < 0))
@@ -2402,7 +2402,7 @@ update_cgroup_v1_resources (runtime_spec_schema_config_linux_resources *resource
         return ret;
       dirfd_htlb = open (path_to_htlb, O_DIRECTORY | O_RDONLY);
       if (UNLIKELY (dirfd_htlb < 0))
-        return crun_make_error (err, errno, "open %s", path_to_htlb);
+        return crun_make_error (err, errno, "open `%s`", path_to_htlb);
 
       ret = write_hugetlb_resources (dirfd_htlb, false, resources->hugepage_limits, resources->hugepage_limits_len,
                                      err);
@@ -2421,7 +2421,7 @@ update_cgroup_v1_resources (runtime_spec_schema_config_linux_resources *resource
 
       dirfd_devs = open (path_to_devs, O_DIRECTORY | O_RDONLY);
       if (UNLIKELY (dirfd_devs < 0))
-        return crun_make_error (err, errno, "open %s", path_to_devs);
+        return crun_make_error (err, errno, "open `%s`", path_to_devs);
 
       ret = write_devices_resources (dirfd_devs, false, resources->devices, resources->devices_len, err);
       if (UNLIKELY (ret < 0))
@@ -2439,7 +2439,7 @@ update_cgroup_v1_resources (runtime_spec_schema_config_linux_resources *resource
 
       dirfd_mem = open (path_to_mem, O_DIRECTORY | O_RDONLY);
       if (UNLIKELY (dirfd_mem < 0))
-        return crun_make_error (err, errno, "open %s", path_to_mem);
+        return crun_make_error (err, errno, "open `%s`", path_to_mem);
 
       ret = write_memory_resources (dirfd_mem, false, resources->memory, err);
       if (UNLIKELY (ret < 0))
@@ -2457,7 +2457,7 @@ update_cgroup_v1_resources (runtime_spec_schema_config_linux_resources *resource
 
       dirfd_pid = open (path_to_pid, O_DIRECTORY | O_RDONLY);
       if (UNLIKELY (dirfd_pid < 0))
-        return crun_make_error (err, errno, "open %s", path_to_pid);
+        return crun_make_error (err, errno, "open `%s`", path_to_pid);
 
       ret = write_pids_resources (dirfd_pid, false, resources->pids, err);
       if (UNLIKELY (ret < 0))
@@ -2477,7 +2477,7 @@ update_cgroup_v1_resources (runtime_spec_schema_config_linux_resources *resource
 
       dirfd_cpu = open (path_to_cpu, O_DIRECTORY | O_RDONLY);
       if (UNLIKELY (dirfd_cpu < 0))
-        return crun_make_error (err, errno, "open %s", path_to_cpu);
+        return crun_make_error (err, errno, "open `%s`", path_to_cpu);
       ret = write_cpu_resources (dirfd_cpu, false, resources->cpu, err);
       if (UNLIKELY (ret < 0))
         return ret;
@@ -2491,7 +2491,7 @@ update_cgroup_v1_resources (runtime_spec_schema_config_linux_resources *resource
 
       dirfd_cpuset = open (path_to_cpuset, O_DIRECTORY | O_RDONLY);
       if (UNLIKELY (dirfd_cpuset < 0))
-        return crun_make_error (err, errno, "open %s", path_to_cpuset);
+        return crun_make_error (err, errno, "open `%s`", path_to_cpuset);
 
       ret = write_cpuset_resources (dirfd_cpuset, false, resources->cpu, err);
       if (UNLIKELY (ret < 0))
@@ -2543,7 +2543,7 @@ update_cgroup_v2_resources (runtime_spec_schema_config_linux_resources *resource
 
   cgroup_dirfd = open (cgroup_path, O_DIRECTORY);
   if (UNLIKELY (cgroup_dirfd < 0))
-    return crun_make_error (err, errno, "open %s", cgroup_path);
+    return crun_make_error (err, errno, "open `%s`", cgroup_path);
 
   if (resources->devices_len)
     {

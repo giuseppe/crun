@@ -4094,7 +4094,7 @@ libcrun_container_restore (libcrun_context_t *context, const char *id, libcrun_c
       int wait_status;
       ret = waitpid (status.pid, &wait_status, 0);
       if (UNLIKELY (ret < 0))
-        return crun_make_error (err, errno, "waitpid failed for container '%s' with %d", id, ret);
+        return crun_make_error (err, errno, "waitpid failed for container `%s` with %d", id, ret);
 
       if (WEXITSTATUS (wait_status))
         return WEXITSTATUS (wait_status);
