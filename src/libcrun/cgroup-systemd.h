@@ -24,8 +24,8 @@
 int libcrun_cgroup_enter_systemd (struct libcrun_cgroup_args *args,
                                   struct libcrun_cgroup_status *out,
                                   libcrun_error_t *err);
-int libcrun_destroy_systemd_cgroup_scope (struct libcrun_cgroup_status *cgroup_status,
-                                          libcrun_error_t *err);
+int libcrun_destroy_cgroup_systemd (struct libcrun_cgroup_status *cgroup_status,
+                                    libcrun_error_t *err);
 
 int parse_sd_array (char *s, char **out, char **next, libcrun_error_t *err);
 

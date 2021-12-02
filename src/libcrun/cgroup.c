@@ -975,7 +975,7 @@ libcrun_move_process_to_cgroup (pid_t pid, pid_t init_pid, char *path, libcrun_e
 }
 
 static int
-libcrun_cgroup_enter_no_manager (struct libcrun_cgroup_args *args arg_unused, struct libcrun_cgroup_status *out, libcrun_error_t *err arg_unused)
+libcrun_cgroup_enter_disabled (struct libcrun_cgroup_args *args arg_unused, struct libcrun_cgroup_status *out, libcrun_error_t *err arg_unused)
 {
   out->path = NULL;
   return 0;
@@ -1250,8 +1250,8 @@ libcrun_cgroup_pause_unpause (struct libcrun_cgroup_status *status, const bool p
   return libcrun_cgroup_pause_unpause_path (status->path, pause, err);
 }
 
-static int
-cgroup_killall (const char *path, int signal, libcrun_error_t *err)
+int
+cgroup_killall_path (const char *path, int signal, libcrun_error_t *err)
 {
   int ret;
   size_t i;
@@ -1355,7 +1355,7 @@ libcrun_cgroup_read_pids (struct libcrun_cgroup_status *status, bool recurse, pi
 int
 libcrun_cgroup_killall (struct libcrun_cgroup_status *cgroup_status, int signal, libcrun_error_t *err)
 {
-  return cgroup_killall (cgroup_status->path, signal, err);
+  return cgroup_killall_path (cgroup_status->path, signal, err);
 }
 
 static int
@@ -1432,8 +1432,8 @@ rmdir_all (const char *path)
   return rmdir (path);
 }
 
-static int
-do_cgroup_destroy (const char *path, int mode, libcrun_error_t *err)
+int
+destroy_cgroup_path (const char *path, int mode, libcrun_error_t *err)
 {
   bool repeat = true;
   int ret;
@@ -1512,7 +1512,7 @@ do_cgroup_destroy (const char *path, int mode, libcrun_error_t *err)
 
           nanosleep (&req, NULL);
 
-          ret = cgroup_killall (path, SIGKILL, err);
+          ret = cgroup_killall_path (path, SIGKILL, err);
           if (UNLIKELY (ret < 0))
             crun_error_release (err);
         }
@@ -1521,32 +1521,59 @@ do_cgroup_destroy (const char *path, int mode, libcrun_error_t *err)
   return 0;
 }
 
-int
-libcrun_cgroup_destroy (struct libcrun_cgroup_status *cgroup_status, libcrun_error_t *err)
+static int
+libcrun_destroy_cgroup_cgroupfs (struct libcrun_cgroup_status *cgroup_status,
+                                 libcrun_error_t *err)
 {
-  int ret;
   int mode;
-  const char *path = cgroup_status->path;
-
-  if (path == NULL || *path == '\0')
-    return 0;
+  int ret;
 
   mode = libcrun_get_cgroup_mode (err);
   if (UNLIKELY (mode < 0))
     return mode;
 
-  ret = cgroup_killall (path, SIGKILL, err);
+  ret = cgroup_killall_path (cgroup_status->path, SIGKILL, err);
   if (UNLIKELY (ret < 0))
     crun_error_release (err);
 
-  if (cgroup_status->manager == CGROUP_MANAGER_SYSTEMD)
+  ret = destroy_cgroup_path (cgroup_status->path, mode, err);
+  if (UNLIKELY (ret < 0))
+    crun_error_release (err);
+
+  return 0;
+}
+
+static int
+libcrun_destroy_cgroup_disabled (struct libcrun_cgroup_status *cgroup_status arg_unused,
+                                 libcrun_error_t *err arg_unused)
+{
+  return 0;
+}
+
+
+int
+libcrun_cgroup_destroy (struct libcrun_cgroup_status *cgroup_status, libcrun_error_t *err)
+{
+  int ret;
+
+  switch (cgroup_status->manager)
     {
-      ret = libcrun_destroy_systemd_cgroup_scope (cgroup_status, err);
-      if (UNLIKELY (ret < 0))
-        crun_error_release (err);
+    case CGROUP_MANAGER_DISABLED:
+      ret = libcrun_destroy_cgroup_disabled (cgroup_status, err);
+      break;
+
+    case CGROUP_MANAGER_SYSTEMD:
+      ret = libcrun_destroy_cgroup_systemd (cgroup_status, err);
+      break;
+
+    case CGROUP_MANAGER_CGROUPFS:
+      ret = libcrun_destroy_cgroup_cgroupfs (cgroup_status, err);
+      break;
+
+    default:
+      return crun_make_error (err, EINVAL, "unknown cgroup manager specified %d", cgroup_status->manager);
     }
 
-  ret = do_cgroup_destroy (path, mode, err);
   if (UNLIKELY (ret < 0))
     crun_error_release (err);
 
@@ -2680,7 +2707,7 @@ libcrun_cgroup_enter (struct libcrun_cgroup_args *args, struct libcrun_cgroup_st
   switch (manager)
     {
     case CGROUP_MANAGER_DISABLED:
-      ret = libcrun_cgroup_enter_no_manager (args, status, err);
+      ret = libcrun_cgroup_enter_disabled (args, status, err);
       break;
 
     case CGROUP_MANAGER_SYSTEMD:

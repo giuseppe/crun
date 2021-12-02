@@ -725,7 +725,7 @@ exit:
   return ret;
 }
 
-int
+static int
 libcrun_destroy_systemd_cgroup_scope (struct libcrun_cgroup_status *cgroup_status,
                                       libcrun_error_t *err)
 {
@@ -846,6 +846,32 @@ libcrun_cgroup_enter_systemd (struct libcrun_cgroup_args *args,
   scope = NULL;
   return 0;
 }
+
+int
+libcrun_destroy_cgroup_systemd (struct libcrun_cgroup_status *cgroup_status,
+                                libcrun_error_t *err)
+{
+  int mode;
+  int ret;
+
+  mode = libcrun_get_cgroup_mode (err);
+  if (UNLIKELY (mode < 0))
+    return mode;
+
+  ret = cgroup_killall_path (cgroup_status->path, SIGKILL, err);
+  if (UNLIKELY (ret < 0))
+    crun_error_release (err);
+
+  ret = libcrun_destroy_systemd_cgroup_scope (cgroup_status, err);
+  if (UNLIKELY (ret < 0))
+    crun_error_release (err);
+
+  ret = destroy_cgroup_path (cgroup_status->path, mode, err);
+  if (UNLIKELY (ret < 0))
+    crun_error_release (err);
+
+  return 0;
+}
 #else
 int
 libcrun_cgroup_enter_systemd (struct libcrun_cgroup_args *args,
@@ -859,8 +885,8 @@ libcrun_cgroup_enter_systemd (struct libcrun_cgroup_args *args,
 }
 
 int
-libcrun_destroy_systemd_cgroup_scope (struct libcrun_cgroup_status *cgroup_status,
-                                      libcrun_error_t *err)
+libcrun_destroy_cgroup_systemd (struct libcrun_cgroup_status *cgroup_status,
+                                libcrun_error_t *err)
 {
   (void) cgroup_status;
 
