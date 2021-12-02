@@ -18,6 +18,7 @@
 
 #include <libcrun/error.h>
 #include <libcrun/cgroup.h>
+#include <libcrun/cgroup-systemd.h>
 #include <libcrun/utils.h>
 #include <libcrun/status.h>
 #include <libcrun/seccomp.h>

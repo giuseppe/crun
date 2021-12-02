@@ -19,6 +19,7 @@
 #include <libcrun/error.h>
 #include <libcrun/utils.h>
 #include <libcrun/cgroup.h>
+#include <libcrun/cgroup-systemd.h>
 #include <sys/types.h>
 #include <unistd.h>
 #include <string.h>

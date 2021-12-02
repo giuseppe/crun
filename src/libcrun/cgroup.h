@@ -99,8 +99,6 @@ int libcrun_get_current_unified_cgroup (char **path, libcrun_error_t *err);
 
 int libcrun_get_cgroup_mode (libcrun_error_t *err);
 
-int parse_sd_array (char *s, char **out, char **next, libcrun_error_t *err);
-
 int libcrun_cgroup_read_pids_from_path (const char *path, bool recurse, pid_t **pids, libcrun_error_t *err);
 
 #endif
