@@ -974,13 +974,6 @@ libcrun_move_process_to_cgroup (pid_t pid, pid_t init_pid, char *path, libcrun_e
   return enter_cgroup (cgroup_mode, pid, init_pid, path, false, err);
 }
 
-static int
-libcrun_cgroup_enter_disabled (struct libcrun_cgroup_args *args arg_unused, struct libcrun_cgroup_status *out, libcrun_error_t *err arg_unused)
-{
-  out->path = NULL;
-  return 0;
-}
-
 const char *
 find_delegate_cgroup (json_map_string_string *annotations)
 {
@@ -995,6 +988,20 @@ find_delegate_cgroup (json_map_string_string *annotations)
     }
 
   return NULL;
+}
+
+static int
+libcrun_cgroup_enter_disabled (struct libcrun_cgroup_args *args arg_unused, struct libcrun_cgroup_status *out, libcrun_error_t *err arg_unused)
+{
+  out->path = NULL;
+  return 0;
+}
+
+static int
+libcrun_destroy_cgroup_disabled (struct libcrun_cgroup_status *cgroup_status arg_unused,
+                                 libcrun_error_t *err arg_unused)
+{
+  return 0;
 }
 
 static int
@@ -1049,6 +1056,28 @@ libcrun_cgroup_enter_cgroupfs (struct libcrun_cgroup_args *args, struct libcrun_
     }
 
   return enter_cgroup (cgroup_mode, pid, 0, process_target_cgroup, true, err);
+}
+
+static int
+libcrun_destroy_cgroup_cgroupfs (struct libcrun_cgroup_status *cgroup_status,
+                                 libcrun_error_t *err)
+{
+  int mode;
+  int ret;
+
+  mode = libcrun_get_cgroup_mode (err);
+  if (UNLIKELY (mode < 0))
+    return mode;
+
+  ret = cgroup_killall_path (cgroup_status->path, SIGKILL, err);
+  if (UNLIKELY (ret < 0))
+    crun_error_release (err);
+
+  ret = destroy_cgroup_path (cgroup_status->path, mode, err);
+  if (UNLIKELY (ret < 0))
+    crun_error_release (err);
+
+  return 0;
 }
 
 static inline void
@@ -1520,36 +1549,6 @@ destroy_cgroup_path (const char *path, int mode, libcrun_error_t *err)
 
   return 0;
 }
-
-static int
-libcrun_destroy_cgroup_cgroupfs (struct libcrun_cgroup_status *cgroup_status,
-                                 libcrun_error_t *err)
-{
-  int mode;
-  int ret;
-
-  mode = libcrun_get_cgroup_mode (err);
-  if (UNLIKELY (mode < 0))
-    return mode;
-
-  ret = cgroup_killall_path (cgroup_status->path, SIGKILL, err);
-  if (UNLIKELY (ret < 0))
-    crun_error_release (err);
-
-  ret = destroy_cgroup_path (cgroup_status->path, mode, err);
-  if (UNLIKELY (ret < 0))
-    crun_error_release (err);
-
-  return 0;
-}
-
-static int
-libcrun_destroy_cgroup_disabled (struct libcrun_cgroup_status *cgroup_status arg_unused,
-                                 libcrun_error_t *err arg_unused)
-{
-  return 0;
-}
-
 
 int
 libcrun_cgroup_destroy (struct libcrun_cgroup_status *cgroup_status, libcrun_error_t *err)
