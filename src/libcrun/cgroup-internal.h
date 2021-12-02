@@ -24,6 +24,8 @@ struct libcrun_cgroup_status
 {
   char *path;
   char *scope;
+
+  int manager;
 };
 
 const char *find_delegate_cgroup (json_map_string_string *annotations);

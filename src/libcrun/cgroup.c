@@ -1522,7 +1522,7 @@ do_cgroup_destroy (const char *path, int mode, libcrun_error_t *err)
 }
 
 int
-libcrun_cgroup_destroy (int manager, struct libcrun_cgroup_status *cgroup_status, libcrun_error_t *err)
+libcrun_cgroup_destroy (struct libcrun_cgroup_status *cgroup_status, libcrun_error_t *err)
 {
   int ret;
   int mode;
@@ -1539,7 +1539,7 @@ libcrun_cgroup_destroy (int manager, struct libcrun_cgroup_status *cgroup_status
   if (UNLIKELY (ret < 0))
     crun_error_release (err);
 
-  if (manager == CGROUP_MANAGER_SYSTEMD)
+  if (cgroup_status->manager == CGROUP_MANAGER_SYSTEMD)
     {
       ret = libcrun_destroy_systemd_cgroup_scope (cgroup_status, err);
       if (UNLIKELY (ret < 0))
@@ -2862,6 +2862,11 @@ libcrun_cgroup_make_status (libcrun_container_status_t *status)
 
   if (status->scope)
     ret->scope = xstrdup (status->scope);
+
+  if (is_empty_string (status->cgroup_path) && is_empty_string (status->scope))
+    ret->manager = CGROUP_MANAGER_DISABLED;
+  else
+    ret->manager = status->systemd_cgroup ? CGROUP_MANAGER_SYSTEMD : CGROUP_MANAGER_CGROUPFS;
 
   return ret;
 }

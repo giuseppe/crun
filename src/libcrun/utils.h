@@ -324,4 +324,10 @@ int base64_decode (const char *iptr, size_t isize, char *optr, size_t osize, siz
 int has_suffix (const char *source, const char *suffix);
 char *str_join_array (int offset, size_t size, char *const array[], const char *joint);
 
+static inline bool
+is_empty_string (const char *s)
+{
+  return s == NULL || s[0] == '\0';
+}
+
 #endif

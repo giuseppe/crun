@@ -1993,13 +1993,14 @@ has_new_pid_namespace (runtime_spec_schema_config_schema *def)
 }
 
 static int
-container_delete_internal (libcrun_context_t *context, runtime_spec_schema_config_schema *def, const char *id,
-                           bool force, bool killall, libcrun_error_t *err)
+container_delete_internal (libcrun_context_t *context, runtime_spec_schema_config_schema *def,
+                           const char *id, bool force, bool killall, libcrun_error_t *err)
 {
-  int ret;
+  cleanup_cgroup_status struct libcrun_cgroup_status *cgroup_status = NULL;
   cleanup_container_status libcrun_container_status_t status = {};
-  const char *state_root = context->state_root;
   cleanup_container libcrun_container_t *container = NULL;
+  const char *state_root = context->state_root;
+  int ret;
 
   ret = libcrun_read_container_status (&status, state_root, id, err);
   if (UNLIKELY (ret < 0))
@@ -2015,6 +2016,8 @@ container_delete_internal (libcrun_context_t *context, runtime_spec_schema_confi
         }
       return libcrun_container_delete_status (state_root, id, err);
     }
+
+  cgroup_status = libcrun_cgroup_make_status (&status);
 
   if (! force)
     {
@@ -2058,10 +2061,6 @@ container_delete_internal (libcrun_context_t *context, runtime_spec_schema_confi
             }
           else if (status.cgroup_path)
             {
-              cleanup_cgroup_status struct libcrun_cgroup_status *cgroup_status = NULL;
-
-              cgroup_status = libcrun_cgroup_make_status (&status);
-
               ret = libcrun_cgroup_killall (cgroup_status, SIGKILL, err);
               if (UNLIKELY (ret < 0))
                 return 0;
@@ -2071,13 +2070,7 @@ container_delete_internal (libcrun_context_t *context, runtime_spec_schema_confi
 
   if (status.cgroup_path)
     {
-      int manager;
-      cleanup_cgroup_status struct libcrun_cgroup_status *cgroup_status = NULL;
-
-      cgroup_status = libcrun_cgroup_make_status (&status);
-
-      manager = status.systemd_cgroup ? CGROUP_MANAGER_SYSTEMD : CGROUP_MANAGER_CGROUPFS;
-      ret = libcrun_cgroup_destroy (manager, cgroup_status, err);
+      ret = libcrun_cgroup_destroy (cgroup_status, err);
       if (UNLIKELY (ret < 0))
         crun_error_write_warning_and_release (context->output_handler_arg, &err);
     }
