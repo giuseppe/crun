@@ -55,13 +55,14 @@ struct libcrun_cgroup_args
 
 /* cgroup life-cycle management.  */
 int libcrun_cgroup_enter (struct libcrun_cgroup_args *args, struct libcrun_cgroup_status **out, libcrun_error_t *err);
-int libcrun_cgroup_destroy (int manager, const char *path, const char *scope,
-                            libcrun_error_t *err);
+int libcrun_cgroup_destroy (int manager, struct libcrun_cgroup_status *cgroup_status, libcrun_error_t *err);
 
 /* Handle the cgroup status.  */
 int libcrun_cgroup_get_status (struct libcrun_cgroup_status *cgroup_status, libcrun_container_status_t *status,
                                libcrun_error_t *err);
 void libcrun_cgroup_status_free (struct libcrun_cgroup_status *cgroup_status);
+
+struct libcrun_cgroup_status *libcrun_cgroup_make_status (libcrun_container_status_t *status);
 
 static inline void
 cgroup_status_freep (struct libcrun_cgroup_status **p)
@@ -72,24 +73,36 @@ cgroup_status_freep (struct libcrun_cgroup_status **p)
 }
 #define cleanup_cgroup_status __attribute__ ((cleanup (cgroup_status_freep)))
 
-int libcrun_cgroup_read_pids (const char *path, bool recurse, pid_t **pids, libcrun_error_t *err);
+/* Operations on the cgroup.  */
 
-int libcrun_get_cgroup_mode (libcrun_error_t *err);
-int libcrun_cgroup_killall_signal (const char *path, int signal, libcrun_error_t *err);
-int libcrun_cgroup_killall (const char *path, libcrun_error_t *err);
+int libcrun_cgroup_killall_signal (struct libcrun_cgroup_status *cgroup_status, int signal, libcrun_error_t *err);
 
-int libcrun_move_process_to_cgroup (pid_t pid, pid_t init_pid, char *path, libcrun_error_t *err);
-int libcrun_update_cgroup_resources (runtime_spec_schema_config_linux_resources *resources, char *path,
-                                     libcrun_error_t *err);
-int libcrun_cgroup_is_container_paused (const char *cgroup_path, bool *paused, libcrun_error_t *err);
-int libcrun_cgroup_pause_unpause (const char *path, const bool pause, libcrun_error_t *err);
-
-int libcrun_cgroups_create_symlinks (int dirfd, libcrun_error_t *err);
-
-int parse_sd_array (char *s, char **out, char **next, libcrun_error_t *err);
+int libcrun_cgroup_killall (struct libcrun_cgroup_status *cgroup_status, libcrun_error_t *err);
 
 int libcrun_cgroup_has_oom (struct libcrun_cgroup_status *status, libcrun_error_t *err);
 
+int libcrun_cgroup_read_pids (struct libcrun_cgroup_status *status, bool recurse, pid_t **pids, libcrun_error_t *err);
+
+int libcrun_update_cgroup_resources (struct libcrun_cgroup_status *status,
+                                     runtime_spec_schema_config_linux_resources *resources,
+                                     libcrun_error_t *err);
+
+int libcrun_cgroup_is_container_paused (struct libcrun_cgroup_status *status, bool *paused, libcrun_error_t *err);
+
+int libcrun_cgroup_pause_unpause (struct libcrun_cgroup_status *status, const bool pause, libcrun_error_t *err);
+
+/* Random utilities not bound to cgroup life-cycle.  */
+
+int libcrun_move_process_to_cgroup (pid_t pid, pid_t init_pid, char *path, libcrun_error_t *err);
+
+int libcrun_cgroups_create_symlinks (int dirfd, libcrun_error_t *err);
+
 int libcrun_get_current_unified_cgroup (char **path, libcrun_error_t *err);
+
+int libcrun_get_cgroup_mode (libcrun_error_t *err);
+
+int parse_sd_array (char *s, char **out, char **next, libcrun_error_t *err);
+
+int libcrun_cgroup_read_pids_from_path (const char *path, bool recurse, pid_t **pids, libcrun_error_t *err);
 
 #endif

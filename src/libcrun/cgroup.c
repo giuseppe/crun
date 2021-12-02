@@ -1899,206 +1899,6 @@ must_stop_proc (runtime_spec_schema_config_linux_resources *resources)
   return false;
 }
 
-int
-libcrun_cgroup_enter (struct libcrun_cgroup_args *args, struct libcrun_cgroup_status **out, libcrun_error_t *err)
-{
-  __attribute__ ((unused)) pid_t sigcont_cleanup __attribute__ ((cleanup (cleanup_sig_contp))) = -1;
-  cleanup_cgroup_status struct libcrun_cgroup_status *status;
-  int manager = args->manager;
-  uid_t root_uid = args->root_uid;
-  uid_t root_gid = args->root_gid;
-  libcrun_error_t tmp_err = NULL;
-  bool cgroup_path_empty;
-  int cgroup_mode;
-  int rootless;
-  int ret;
-
-  status = xmalloc0 (sizeof *status);
-
-  cgroup_mode = libcrun_get_cgroup_mode (err);
-  if (UNLIKELY (cgroup_mode < 0))
-    return cgroup_mode;
-
-  /* If the cgroup configuration is limiting what CPUs/memory Nodes are available for the container,
-     then stop the container process during the cgroup configuration to avoid it being rescheduled on
-     a CPU that is not allowed.  This extra step is required for setting up the sub cgroup with the
-     systemd driver.  The alternative would be to temporarily setup the cpus/mems using d-bus.
-  */
-  if (must_stop_proc (args->resources))
-    {
-      ret = TEMP_FAILURE_RETRY (kill (args->pid, SIGSTOP));
-      if (UNLIKELY (ret < 0))
-        return crun_make_error (err, errno, "cannot stop container process '%d' with SIGSTOP", args->pid);
-
-      /* Send SIGCONT as soon as the function exits.  */
-      sigcont_cleanup = args->pid;
-    }
-
-  if (cgroup_mode == CGROUP_MODE_HYBRID)
-    {
-      /* We don't really support hybrid mode, so check that cgroups2 is not using any controller.  */
-
-      size_t len;
-      cleanup_free char *buffer = NULL;
-
-      ret = read_all_file (CGROUP_ROOT "/unified/cgroup.controllers", &buffer, &len, err);
-      if (UNLIKELY (ret < 0))
-        return ret;
-      if (len > 0)
-        return crun_make_error (err, 0, "cgroups in hybrid mode not supported, drop all controllers from cgroupv2");
-    }
-
-  switch (manager)
-    {
-    case CGROUP_MANAGER_DISABLED:
-      ret = libcrun_cgroup_enter_no_manager (args, status, err);
-      break;
-
-    case CGROUP_MANAGER_SYSTEMD:
-      ret = libcrun_cgroup_enter_systemd (args, status, err);
-      break;
-
-    case CGROUP_MANAGER_CGROUPFS:
-      ret = libcrun_cgroup_enter_cgroupfs (args, status, err);
-      break;
-
-    default:
-      return crun_make_error (err, EINVAL, "unknown cgroup manager specified %d", manager);
-    }
-
-  if (LIKELY (ret >= 0))
-    {
-      bool need_chown = root_uid != (uid_t) -1 || root_gid != (gid_t) -1;
-      if (status->path && cgroup_mode == CGROUP_MODE_UNIFIED && need_chown)
-        {
-          ret = chown_cgroups (status->path, root_uid, root_gid, err);
-          if (UNLIKELY (ret < 0))
-            return ret;
-        }
-
-      if (args->resources && status->path)
-        {
-          ret = libcrun_update_cgroup_resources (args->resources, status->path, err);
-          if (UNLIKELY (ret < 0))
-            return ret;
-        }
-
-      goto success;
-    }
-
-  rootless = is_rootless (&tmp_err);
-  if (UNLIKELY (rootless < 0))
-    {
-      crun_error_release (err);
-      *err = tmp_err;
-      return rootless;
-    }
-
-  /* Ignore errors only if there is no explicit path set in the configuration.  */
-  cgroup_path_empty = (args->cgroup_path == NULL || args->cgroup_path[0] == '\0');
-  if (rootless > 0 && cgroup_path_empty && (cgroup_mode != CGROUP_MODE_UNIFIED || manager != CGROUP_MANAGER_SYSTEMD))
-    {
-      /* Ignore cgroups errors and set there is no cgroup path to use.  */
-      free (status->path);
-      status->path = NULL;
-      crun_error_release (err);
-      return 0;
-    }
-
-  if (ret < 0)
-    return ret;
-
-success:
-  *out = status;
-  status = NULL;
-  return 0;
-}
-
-int
-libcrun_cgroup_is_container_paused (const char *cgroup_path, bool *paused, libcrun_error_t *err)
-{
-  cleanup_free char *content = NULL;
-  cleanup_free char *path = NULL;
-  const char *state;
-  int cgroup_mode;
-  int ret;
-
-  if (cgroup_path == NULL || cgroup_path[0] == '\0')
-    return 0;
-
-  cgroup_mode = libcrun_get_cgroup_mode (err);
-  if (UNLIKELY (cgroup_mode < 0))
-    return cgroup_mode;
-
-  if (cgroup_mode == CGROUP_MODE_UNIFIED)
-    {
-      state = "1";
-
-      ret = append_paths (&path, err, CGROUP_ROOT, cgroup_path, "cgroup.freeze", NULL);
-      if (UNLIKELY (ret < 0))
-        return ret;
-    }
-  else
-    {
-      state = "FROZEN";
-
-      ret = append_paths (&path, err, CGROUP_ROOT "/freezer", cgroup_path, "freezer.state", NULL);
-      if (UNLIKELY (ret < 0))
-        return ret;
-    }
-
-  ret = read_all_file (path, &content, NULL, err);
-  if (UNLIKELY (ret < 0))
-    return ret;
-
-  *paused = strstr (content, state) != NULL;
-  return 0;
-}
-
-static int
-libcrun_cgroup_pause_unpause_with_mode (const char *cgroup_path, int cgroup_mode, const bool pause,
-                                        libcrun_error_t *err)
-{
-  cleanup_free char *path = NULL;
-  const char *state = "";
-  int ret;
-
-  if (cgroup_path == NULL || cgroup_path[0] == '\0')
-    return crun_make_error (err, 0, "cannot %s the container without a cgroup", pause ? "pause" : "resume");
-
-  if (cgroup_mode == CGROUP_MODE_UNIFIED)
-    {
-      state = pause ? "1" : "0";
-      ret = append_paths (&path, err, CGROUP_ROOT, cgroup_path, "cgroup.freeze", NULL);
-      if (UNLIKELY (ret < 0))
-        return ret;
-    }
-  else
-    {
-      state = pause ? "FROZEN" : "THAWED";
-      ret = append_paths (&path, err, CGROUP_ROOT "/freezer", cgroup_path, "freezer.state", NULL);
-      if (UNLIKELY (ret < 0))
-        return ret;
-    }
-
-  ret = write_file (path, state, strlen (state), err);
-  if (ret >= 0)
-    return 0;
-  return ret;
-}
-
-int
-libcrun_cgroup_pause_unpause (const char *cgroup_path, const bool pause, libcrun_error_t *err)
-{
-  int cgroup_mode;
-
-  cgroup_mode = libcrun_get_cgroup_mode (err);
-  if (UNLIKELY (cgroup_mode < 0))
-    return cgroup_mode;
-
-  return libcrun_cgroup_pause_unpause_with_mode (cgroup_path, cgroup_mode, pause, err);
-}
-
 static int
 read_pids_cgroup (int dfd, bool recurse, pid_t **pids, size_t *n_pids, size_t *allocated, libcrun_error_t *err)
 {
@@ -2173,7 +1973,7 @@ read_pids_cgroup (int dfd, bool recurse, pid_t **pids, size_t *n_pids, size_t *a
 }
 
 int
-libcrun_cgroup_read_pids (const char *path, bool recurse, pid_t **pids, libcrun_error_t *err)
+libcrun_cgroup_read_pids_from_path (const char *path, bool recurse, pid_t **pids, libcrun_error_t *err)
 {
   cleanup_free char *cgroup_path = NULL;
   size_t n_pids, allocated;
@@ -2217,8 +2017,58 @@ libcrun_cgroup_read_pids (const char *path, bool recurse, pid_t **pids, libcrun_
   return read_pids_cgroup (dirfd, recurse, pids, &n_pids, &allocated, err);
 }
 
+static int
+libcrun_cgroup_pause_unpause_with_mode (const char *cgroup_path, int cgroup_mode, const bool pause,
+                                        libcrun_error_t *err)
+{
+  cleanup_free char *path = NULL;
+  const char *state = "";
+  int ret;
+
+  if (cgroup_path == NULL || cgroup_path[0] == '\0')
+    return crun_make_error (err, 0, "cannot %s the container without a cgroup", pause ? "pause" : "resume");
+
+  if (cgroup_mode == CGROUP_MODE_UNIFIED)
+    {
+      state = pause ? "1" : "0";
+      ret = append_paths (&path, err, CGROUP_ROOT, cgroup_path, "cgroup.freeze", NULL);
+      if (UNLIKELY (ret < 0))
+        return ret;
+    }
+  else
+    {
+      state = pause ? "FROZEN" : "THAWED";
+      ret = append_paths (&path, err, CGROUP_ROOT "/freezer", cgroup_path, "freezer.state", NULL);
+      if (UNLIKELY (ret < 0))
+        return ret;
+    }
+
+  ret = write_file (path, state, strlen (state), err);
+  if (ret >= 0)
+    return 0;
+  return ret;
+}
+
+static int
+libcrun_cgroup_pause_unpause_path (const char *cgroup_path, const bool pause, libcrun_error_t *err)
+{
+  int cgroup_mode;
+
+  cgroup_mode = libcrun_get_cgroup_mode (err);
+  if (UNLIKELY (cgroup_mode < 0))
+    return cgroup_mode;
+
+  return libcrun_cgroup_pause_unpause_with_mode (cgroup_path, cgroup_mode, pause, err);
+}
+
 int
-libcrun_cgroup_killall_signal (const char *path, int signal, libcrun_error_t *err)
+libcrun_cgroup_pause_unpause (struct libcrun_cgroup_status *status, const bool pause, libcrun_error_t *err)
+{
+  return libcrun_cgroup_pause_unpause_path (status->path, pause, err);
+}
+
+static int
+cgroup_killall (const char *path, int signal, libcrun_error_t *err)
 {
   int ret;
   size_t i;
@@ -2243,11 +2093,11 @@ libcrun_cgroup_killall_signal (const char *path, int signal, libcrun_error_t *er
       crun_error_release (err);
     }
 
-  ret = libcrun_cgroup_pause_unpause (path, true, err);
+  ret = libcrun_cgroup_pause_unpause_path (path, true, err);
   if (UNLIKELY (ret < 0))
     crun_error_release (err);
 
-  ret = libcrun_cgroup_read_pids (path, true, &pids, err);
+  ret = libcrun_cgroup_read_pids_from_path (path, true, &pids, err);
   if (UNLIKELY (ret < 0))
     {
       if (crun_error_get_errno (err) != ENOENT)
@@ -2264,11 +2114,65 @@ libcrun_cgroup_killall_signal (const char *path, int signal, libcrun_error_t *er
         return crun_make_error (err, errno, "kill process %d", pids[i]);
     }
 
-  ret = libcrun_cgroup_pause_unpause (path, false, err);
+  ret = libcrun_cgroup_pause_unpause_path (path, false, err);
   if (UNLIKELY (ret < 0))
     crun_error_release (err);
 
   return 0;
+}
+
+int
+libcrun_cgroup_is_container_paused (struct libcrun_cgroup_status *status, bool *paused, libcrun_error_t *err)
+{
+  const char *cgroup_path = status->path;
+  cleanup_free char *content = NULL;
+  cleanup_free char *path = NULL;
+  const char *state;
+  int cgroup_mode;
+  int ret;
+
+  if (cgroup_path == NULL || cgroup_path[0] == '\0')
+    return 0;
+
+  cgroup_mode = libcrun_get_cgroup_mode (err);
+  if (UNLIKELY (cgroup_mode < 0))
+    return cgroup_mode;
+
+  if (cgroup_mode == CGROUP_MODE_UNIFIED)
+    {
+      state = "1";
+
+      ret = append_paths (&path, err, CGROUP_ROOT, cgroup_path, "cgroup.freeze", NULL);
+      if (UNLIKELY (ret < 0))
+        return ret;
+    }
+  else
+    {
+      state = "FROZEN";
+
+      ret = append_paths (&path, err, CGROUP_ROOT "/freezer", cgroup_path, "freezer.state", NULL);
+      if (UNLIKELY (ret < 0))
+        return ret;
+    }
+
+  ret = read_all_file (path, &content, NULL, err);
+  if (UNLIKELY (ret < 0))
+    return ret;
+
+  *paused = strstr (content, state) != NULL;
+  return 0;
+}
+
+int
+libcrun_cgroup_read_pids (struct libcrun_cgroup_status *status, bool recurse, pid_t **pids, libcrun_error_t *err)
+{
+  return libcrun_cgroup_read_pids_from_path (status->path, recurse, pids, err);
+}
+
+int
+libcrun_cgroup_killall_signal (struct libcrun_cgroup_status *cgroup_status, int signal, libcrun_error_t *err)
+{
+  return cgroup_killall (cgroup_status->path, signal, err);
 }
 
 static int
@@ -2346,9 +2250,9 @@ rmdir_all (const char *path)
 }
 
 int
-libcrun_cgroup_killall (const char *path, libcrun_error_t *err)
+libcrun_cgroup_killall (struct libcrun_cgroup_status *cgroup_status, libcrun_error_t *err)
 {
-  return libcrun_cgroup_killall_signal (path, SIGKILL, err);
+  return libcrun_cgroup_killall_signal (cgroup_status, SIGKILL, err);
 }
 
 static int
@@ -2431,7 +2335,7 @@ do_cgroup_destroy (const char *path, int mode, libcrun_error_t *err)
 
           nanosleep (&req, NULL);
 
-          ret = libcrun_cgroup_killall (path, err);
+          ret = cgroup_killall (path, SIGKILL, err);
           if (UNLIKELY (ret < 0))
             crun_error_release (err);
         }
@@ -2441,13 +2345,12 @@ do_cgroup_destroy (const char *path, int mode, libcrun_error_t *err)
 }
 
 int
-libcrun_cgroup_destroy (int manager, const char *path, const char *scope, libcrun_error_t *err)
+libcrun_cgroup_destroy (int manager, struct libcrun_cgroup_status *cgroup_status, libcrun_error_t *err)
 {
   int ret;
   int mode;
-
-  (void) manager;
-  (void) scope;
+  const char *path = cgroup_status->path;
+  const char *scope = cgroup_status->scope;
 
   if (path == NULL || *path == '\0')
     return 0;
@@ -2456,7 +2359,7 @@ libcrun_cgroup_destroy (int manager, const char *path, const char *scope, libcru
   if (UNLIKELY (mode < 0))
     return mode;
 
-  ret = libcrun_cgroup_killall (path, err);
+  ret = cgroup_killall (path, SIGKILL, err);
   if (UNLIKELY (ret < 0))
     crun_error_release (err);
 
@@ -3236,7 +3139,7 @@ write_cpuset_resources (int dirfd_cpuset, int cgroup2, runtime_spec_schema_confi
 }
 
 static int
-update_cgroup_v1_resources (runtime_spec_schema_config_linux_resources *resources, char *path, libcrun_error_t *err)
+update_cgroup_v1_resources (runtime_spec_schema_config_linux_resources *resources, const char *path, libcrun_error_t *err)
 {
   int ret;
 
@@ -3424,7 +3327,7 @@ write_unified_resources (int cgroup_dirfd, runtime_spec_schema_config_linux_reso
 }
 
 static int
-update_cgroup_v2_resources (runtime_spec_schema_config_linux_resources *resources, char *path, libcrun_error_t *err)
+update_cgroup_v2_resources (runtime_spec_schema_config_linux_resources *resources, const char *path, libcrun_error_t *err)
 {
   cleanup_free char *cgroup_path = NULL;
   cleanup_close int cgroup_dirfd = -1;
@@ -3497,8 +3400,9 @@ update_cgroup_v2_resources (runtime_spec_schema_config_linux_resources *resource
 }
 
 int
-libcrun_update_cgroup_resources (runtime_spec_schema_config_linux_resources *resources, char *path,
-                                 libcrun_error_t *err)
+update_cgroup_resources (const char *path,
+                         runtime_spec_schema_config_linux_resources *resources,
+                         libcrun_error_t *err)
 {
   int cgroup_mode;
 
@@ -3540,6 +3444,129 @@ libcrun_update_cgroup_resources (runtime_spec_schema_config_linux_resources *res
     default:
       return crun_make_error (err, 0, "invalid cgroup mode %d", cgroup_mode);
     }
+}
+
+int
+libcrun_update_cgroup_resources (struct libcrun_cgroup_status *status,
+                                 runtime_spec_schema_config_linux_resources *resources,
+                                 libcrun_error_t *err)
+{
+  return update_cgroup_resources (status->path, resources, err);
+}
+
+int
+libcrun_cgroup_enter (struct libcrun_cgroup_args *args, struct libcrun_cgroup_status **out, libcrun_error_t *err)
+{
+  __attribute__ ((unused)) pid_t sigcont_cleanup __attribute__ ((cleanup (cleanup_sig_contp))) = -1;
+  cleanup_cgroup_status struct libcrun_cgroup_status *status;
+  int manager = args->manager;
+  uid_t root_uid = args->root_uid;
+  uid_t root_gid = args->root_gid;
+  libcrun_error_t tmp_err = NULL;
+  bool cgroup_path_empty;
+  int cgroup_mode;
+  int rootless;
+  int ret;
+
+  status = xmalloc0 (sizeof *status);
+
+  cgroup_mode = libcrun_get_cgroup_mode (err);
+  if (UNLIKELY (cgroup_mode < 0))
+    return cgroup_mode;
+
+  /* If the cgroup configuration is limiting what CPUs/memory Nodes are available for the container,
+     then stop the container process during the cgroup configuration to avoid it being rescheduled on
+     a CPU that is not allowed.  This extra step is required for setting up the sub cgroup with the
+     systemd driver.  The alternative would be to temporarily setup the cpus/mems using d-bus.
+  */
+  if (must_stop_proc (args->resources))
+    {
+      ret = TEMP_FAILURE_RETRY (kill (args->pid, SIGSTOP));
+      if (UNLIKELY (ret < 0))
+        return crun_make_error (err, errno, "cannot stop container process '%d' with SIGSTOP", args->pid);
+
+      /* Send SIGCONT as soon as the function exits.  */
+      sigcont_cleanup = args->pid;
+    }
+
+  if (cgroup_mode == CGROUP_MODE_HYBRID)
+    {
+      /* We don't really support hybrid mode, so check that cgroups2 is not using any controller.  */
+
+      size_t len;
+      cleanup_free char *buffer = NULL;
+
+      ret = read_all_file (CGROUP_ROOT "/unified/cgroup.controllers", &buffer, &len, err);
+      if (UNLIKELY (ret < 0))
+        return ret;
+      if (len > 0)
+        return crun_make_error (err, 0, "cgroups in hybrid mode not supported, drop all controllers from cgroupv2");
+    }
+
+  switch (manager)
+    {
+    case CGROUP_MANAGER_DISABLED:
+      ret = libcrun_cgroup_enter_no_manager (args, status, err);
+      break;
+
+    case CGROUP_MANAGER_SYSTEMD:
+      ret = libcrun_cgroup_enter_systemd (args, status, err);
+      break;
+
+    case CGROUP_MANAGER_CGROUPFS:
+      ret = libcrun_cgroup_enter_cgroupfs (args, status, err);
+      break;
+
+    default:
+      return crun_make_error (err, EINVAL, "unknown cgroup manager specified %d", manager);
+    }
+
+  if (LIKELY (ret >= 0))
+    {
+      bool need_chown = root_uid != (uid_t) -1 || root_gid != (gid_t) -1;
+      if (status->path && cgroup_mode == CGROUP_MODE_UNIFIED && need_chown)
+        {
+          ret = chown_cgroups (status->path, root_uid, root_gid, err);
+          if (UNLIKELY (ret < 0))
+            return ret;
+        }
+
+      if (args->resources && status->path)
+        {
+          ret = update_cgroup_resources (status->path, args->resources, err);
+          if (UNLIKELY (ret < 0))
+            return ret;
+        }
+
+      goto success;
+    }
+
+  rootless = is_rootless (&tmp_err);
+  if (UNLIKELY (rootless < 0))
+    {
+      crun_error_release (err);
+      *err = tmp_err;
+      return rootless;
+    }
+
+  /* Ignore errors only if there is no explicit path set in the configuration.  */
+  cgroup_path_empty = (args->cgroup_path == NULL || args->cgroup_path[0] == '\0');
+  if (rootless > 0 && cgroup_path_empty && (cgroup_mode != CGROUP_MODE_UNIFIED || manager != CGROUP_MANAGER_SYSTEMD))
+    {
+      /* Ignore cgroups errors and set there is no cgroup path to use.  */
+      free (status->path);
+      status->path = NULL;
+      crun_error_release (err);
+      return 0;
+    }
+
+  if (ret < 0)
+    return ret;
+
+success:
+  *out = status;
+  status = NULL;
+  return 0;
 }
 
 int
@@ -3630,7 +3657,8 @@ libcrun_cgroup_has_oom (struct libcrun_cgroup_status *status, libcrun_error_t *e
 
 int
 libcrun_cgroup_get_status (struct libcrun_cgroup_status *cgroup_status,
-                           libcrun_container_status_t *status, libcrun_error_t *err arg_unused)
+                           libcrun_container_status_t *status,
+                           libcrun_error_t *err arg_unused)
 {
   status->cgroup_path = cgroup_status->path;
   status->scope = cgroup_status->scope;
@@ -3646,4 +3674,20 @@ libcrun_cgroup_status_free (struct libcrun_cgroup_status *cgroup_status)
   free (cgroup_status->path);
   free (cgroup_status->scope);
   free (cgroup_status);
+}
+
+struct libcrun_cgroup_status *
+libcrun_cgroup_make_status (libcrun_container_status_t *status)
+{
+  struct libcrun_cgroup_status *ret;
+
+  ret = xmalloc0 (sizeof *ret);
+
+  if (status->cgroup_path)
+    ret->path = xstrdup (status->cgroup_path);
+
+  if (status->scope)
+    ret->scope = xstrdup (status->scope);
+
+  return ret;
 }

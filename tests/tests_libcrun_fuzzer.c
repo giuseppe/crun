@@ -170,7 +170,7 @@ test_read_cgroup_pids (uint8_t *buf, size_t len)
   if (path == NULL)
     return 0;
 
-  libcrun_cgroup_read_pids (path, true, &pids, &err);
+  libcrun_cgroup_read_pids_from_path (path, true, &pids, &err);
   crun_error_release (&err);
   return 0;
 }

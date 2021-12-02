@@ -2058,7 +2058,11 @@ container_delete_internal (libcrun_context_t *context, runtime_spec_schema_confi
             }
           else if (status.cgroup_path)
             {
-              ret = libcrun_cgroup_killall (status.cgroup_path, err);
+              cleanup_cgroup_status struct libcrun_cgroup_status *cgroup_status = NULL;
+
+              cgroup_status = libcrun_cgroup_make_status (&status);
+
+              ret = libcrun_cgroup_killall_signal (cgroup_status, SIGKILL, err);
               if (UNLIKELY (ret < 0))
                 return 0;
             }
@@ -2068,9 +2072,12 @@ container_delete_internal (libcrun_context_t *context, runtime_spec_schema_confi
   if (status.cgroup_path)
     {
       int manager;
+      cleanup_cgroup_status struct libcrun_cgroup_status *cgroup_status = NULL;
+
+      cgroup_status = libcrun_cgroup_make_status (&status);
 
       manager = status.systemd_cgroup ? CGROUP_MANAGER_SYSTEMD : CGROUP_MANAGER_CGROUPFS;
-      ret = libcrun_cgroup_destroy (manager, status.cgroup_path, status.scope, err);
+      ret = libcrun_cgroup_destroy (manager, cgroup_status, err);
       if (UNLIKELY (ret < 0))
         crun_error_write_warning_and_release (context->output_handler_arg, &err);
     }
@@ -2109,12 +2116,15 @@ libcrun_container_kill_all (libcrun_context_t *context, const char *id, int sign
   int ret;
   const char *state_root = context->state_root;
   cleanup_container_status libcrun_container_status_t status = {};
+  cleanup_cgroup_status struct libcrun_cgroup_status *cgroup_status = NULL;
 
   ret = libcrun_read_container_status (&status, state_root, id, err);
   if (UNLIKELY (ret < 0))
     return ret;
 
-  ret = libcrun_cgroup_killall_signal (status.cgroup_path, signal, err);
+  cgroup_status = libcrun_cgroup_make_status (&status);
+
+  ret = libcrun_cgroup_killall_signal (cgroup_status, signal, err);
   if (UNLIKELY (ret < 0))
     return ret;
   return 0;
@@ -3286,7 +3296,11 @@ libcrun_get_container_state_string (const char *id, libcrun_container_status_t *
 
   if (*running && ! has_fifo)
     {
-      ret = libcrun_cgroup_is_container_paused (status->cgroup_path, &paused, err);
+      cleanup_cgroup_status struct libcrun_cgroup_status *cgroup_status = NULL;
+
+      cgroup_status = libcrun_cgroup_make_status (status);
+
+      ret = libcrun_cgroup_is_container_paused (cgroup_status, &paused, err);
       if (UNLIKELY (ret < 0))
         {
           /*
@@ -3694,9 +3708,15 @@ libcrun_container_exec_with_options (libcrun_context_t *context, const char *id,
   if (container_status == 0)
     return crun_make_error (err, 0, "the container `%s` is not running.", id);
 
-  ret = libcrun_cgroup_is_container_paused (status.cgroup_path, &container_paused, err);
-  if (UNLIKELY (ret < 0))
-    return ret;
+  {
+    cleanup_cgroup_status struct libcrun_cgroup_status *cgroup_status = NULL;
+
+    cgroup_status = libcrun_cgroup_make_status (&status);
+
+    ret = libcrun_cgroup_is_container_paused (cgroup_status, &container_paused, err);
+    if (UNLIKELY (ret < 0))
+      return ret;
+  }
 
   if (UNLIKELY (container_paused))
     return crun_make_error (err, 0, "the container `%s` is paused.", id);
@@ -4093,6 +4113,7 @@ libcrun_container_restore (libcrun_context_t *context, const char *id, libcrun_c
 int
 libcrun_container_read_pids (libcrun_context_t *context, const char *id, bool recurse, pid_t **pids, libcrun_error_t *err)
 {
+  cleanup_cgroup_status struct libcrun_cgroup_status *cgroup_status = NULL;
   cleanup_container_status libcrun_container_status_t status = {};
   int ret;
 
@@ -4103,5 +4124,7 @@ libcrun_container_read_pids (libcrun_context_t *context, const char *id, bool re
   if (status.cgroup_path == NULL || status.cgroup_path[0] == '\0')
     return crun_make_error (err, 0, "the container is not using cgroups");
 
-  return libcrun_cgroup_read_pids (status.cgroup_path, recurse, pids, err);
+  cgroup_status = libcrun_cgroup_make_status (&status);
+
+  return libcrun_cgroup_read_pids (cgroup_status, recurse, pids, err);
 }
