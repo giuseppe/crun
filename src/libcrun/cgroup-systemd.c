@@ -22,6 +22,7 @@
 #include "cgroup.h"
 #include "cgroup-internal.h"
 #include "cgroup-systemd.h"
+#include "cgroup-utils.h"
 #include "ebpf.h"
 #include "utils.h"
 #include "status.h"

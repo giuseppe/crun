@@ -34,6 +34,7 @@
 #  include "status.h"
 #  include "utils.h"
 #  include "cgroup.h"
+#  include "cgroup-utils.h"
 
 #  define CRIU_CHECKPOINT_LOG_FILE "dump.log"
 #  define CRIU_RESTORE_LOG_FILE "restore.log"

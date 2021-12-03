@@ -89,16 +89,4 @@ int libcrun_cgroup_is_container_paused (struct libcrun_cgroup_status *status, bo
 
 int libcrun_cgroup_pause_unpause (struct libcrun_cgroup_status *status, const bool pause, libcrun_error_t *err);
 
-/* Random utilities not bound to cgroup life-cycle.  */
-
-int libcrun_move_process_to_cgroup (pid_t pid, pid_t init_pid, char *path, libcrun_error_t *err);
-
-int libcrun_cgroups_create_symlinks (int dirfd, libcrun_error_t *err);
-
-int libcrun_get_current_unified_cgroup (char **path, libcrun_error_t *err);
-
-int libcrun_get_cgroup_mode (libcrun_error_t *err);
-
-int libcrun_cgroup_read_pids_from_path (const char *path, bool recurse, pid_t **pids, libcrun_error_t *err);
-
 #endif

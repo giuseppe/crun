@@ -43,6 +43,7 @@
 #include <signal.h>
 #include "terminal.h"
 #include "cgroup.h"
+#include "cgroup-utils.h"
 #include "status.h"
 #include "criu.h"
 #include <sys/socket.h>

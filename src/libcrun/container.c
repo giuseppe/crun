@@ -37,6 +37,7 @@
 #include "linux.h"
 #include "terminal.h"
 #include "cgroup.h"
+#include "cgroup-utils.h"
 #include <sys/prctl.h>
 #include <sys/signalfd.h>
 #include <sys/epoll.h>
