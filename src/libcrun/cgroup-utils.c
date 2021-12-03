@@ -112,7 +112,6 @@ libcrun_get_current_unified_cgroup (char **path, libcrun_error_t *err)
   return append_paths (path, err, CGROUP_ROOT, from, NULL);
 }
 
-
 #ifndef CGROUP2_SUPER_MAGIC
 #  define CGROUP2_SUPER_MAGIC 0x63677270
 #endif

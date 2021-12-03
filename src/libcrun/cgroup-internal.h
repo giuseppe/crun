@@ -19,6 +19,7 @@
 #define CGROUP_INTERNAL_H
 
 #include "container.h"
+#include "utils.h"
 
 struct libcrun_cgroup_status
 {
@@ -40,5 +41,14 @@ int cgroup_killall_path (const char *path, int signal, libcrun_error_t *err);
 int libcrun_cgroup_read_pids_from_path (const char *path, bool recurse, pid_t **pids, libcrun_error_t *err);
 
 bool read_proc_cgroup (char *content, char **saveptr, char **id, char **controller_list, char **path);
+
+static inline int
+is_rootless (libcrun_error_t *err)
+{
+  if (geteuid ())
+    return 1;
+
+  return check_running_in_user_namespace (err);
+}
 
 #endif
