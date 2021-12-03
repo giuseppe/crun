@@ -808,7 +808,7 @@ find_systemd_subgroup (json_map_string_string *annotations, int cgroup_mode)
   return NULL;
 }
 
-int
+static int
 libcrun_cgroup_enter_systemd (struct libcrun_cgroup_args *args,
                               struct libcrun_cgroup_status *out,
                               libcrun_error_t *err)
@@ -848,7 +848,7 @@ libcrun_cgroup_enter_systemd (struct libcrun_cgroup_args *args,
   return 0;
 }
 
-int
+static int
 libcrun_destroy_cgroup_systemd (struct libcrun_cgroup_status *cgroup_status,
                                 libcrun_error_t *err)
 {
@@ -874,7 +874,7 @@ libcrun_destroy_cgroup_systemd (struct libcrun_cgroup_status *cgroup_status,
   return 0;
 }
 #else
-int
+static int
 libcrun_cgroup_enter_systemd (struct libcrun_cgroup_args *args,
                               struct libcrun_cgroup_status *out,
                               libcrun_error_t *err)
@@ -885,7 +885,7 @@ libcrun_cgroup_enter_systemd (struct libcrun_cgroup_args *args,
   return crun_make_error (err, ENOTSUP, "systemd not supported");
 }
 
-int
+static int
 libcrun_destroy_cgroup_systemd (struct libcrun_cgroup_status *cgroup_status,
                                 libcrun_error_t *err)
 {
@@ -894,3 +894,9 @@ libcrun_destroy_cgroup_systemd (struct libcrun_cgroup_status *cgroup_status,
   return crun_make_error (err, ENOTSUP, "systemd not supported");
 }
 #endif
+
+struct libcrun_cgroup_manager cgroup_manager_systemd =
+  {
+    .create_cgroup = libcrun_cgroup_enter_systemd,
+    .destroy_cgroup = libcrun_destroy_cgroup_systemd,
+  };

@@ -39,6 +39,14 @@ struct libcrun_cgroup_status
   int manager;
 };
 
+struct libcrun_cgroup_manager
+{
+  /* Create a new cgroup and fill PATH in OUT.  */
+  int (*create_cgroup) (struct libcrun_cgroup_args *args, struct libcrun_cgroup_status *out, libcrun_error_t *err);
+  /* Destroy the cgroup and kill any process if needed.  */
+  int (*destroy_cgroup) (struct libcrun_cgroup_status *cgroup_status, libcrun_error_t *err);
+};
+
 const char *find_delegate_cgroup (json_map_string_string *annotations);
 int move_process_to_cgroup (pid_t pid, const char *subsystem, const char *path, libcrun_error_t *err);
 int enter_cgroup_subsystem (pid_t pid, const char *subsystem, const char *path, bool create_if_missing,

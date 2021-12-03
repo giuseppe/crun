@@ -22,9 +22,6 @@
 #include "cgroup.h"
 #include <unistd.h>
 
-int libcrun_cgroup_enter_cgroupfs (struct libcrun_cgroup_args *args, struct libcrun_cgroup_status *out, libcrun_error_t *err);
-
-int libcrun_destroy_cgroup_cgroupfs (struct libcrun_cgroup_status *cgroup_status,
-                                     libcrun_error_t *err);
+extern struct libcrun_cgroup_manager cgroup_manager_cgroupfs;
 
 #endif

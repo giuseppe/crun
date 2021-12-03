@@ -41,6 +41,48 @@
 #include <fcntl.h>
 #include <libgen.h>
 
+static int
+libcrun_cgroup_enter_disabled (struct libcrun_cgroup_args *args arg_unused, struct libcrun_cgroup_status *out, libcrun_error_t *err arg_unused)
+{
+  out->path = NULL;
+  return 0;
+}
+
+static int
+libcrun_destroy_cgroup_disabled (struct libcrun_cgroup_status *cgroup_status arg_unused,
+                                 libcrun_error_t *err arg_unused)
+{
+  return 0;
+}
+
+struct libcrun_cgroup_manager cgroup_manager_disabled =
+  {
+    .create_cgroup = libcrun_cgroup_enter_disabled,
+    .destroy_cgroup = libcrun_destroy_cgroup_disabled,
+  };
+
+static int
+get_cgroup_manager (int manager, struct libcrun_cgroup_manager **out, libcrun_error_t *err)
+{
+  switch (manager)
+    {
+    case CGROUP_MANAGER_DISABLED:
+      *out = &cgroup_manager_disabled;
+      return 0;
+
+    case CGROUP_MANAGER_SYSTEMD:
+      *out = &cgroup_manager_systemd;
+      return 0;
+
+    case CGROUP_MANAGER_CGROUPFS:
+      *out = &cgroup_manager_cgroupfs;
+      return 0;
+    }
+
+  *out = NULL;
+  return crun_make_error (err, EINVAL, "unknown cgroup manager specified %d", manager);
+}
+
 const char *
 find_delegate_cgroup (json_map_string_string *annotations)
 {
@@ -55,20 +97,6 @@ find_delegate_cgroup (json_map_string_string *annotations)
     }
 
   return NULL;
-}
-
-static int
-libcrun_cgroup_enter_disabled (struct libcrun_cgroup_args *args arg_unused, struct libcrun_cgroup_status *out, libcrun_error_t *err arg_unused)
-{
-  out->path = NULL;
-  return 0;
-}
-
-static int
-libcrun_destroy_cgroup_disabled (struct libcrun_cgroup_status *cgroup_status arg_unused,
-                                 libcrun_error_t *err arg_unused)
-{
-  return 0;
 }
 
 static inline void
@@ -165,26 +193,15 @@ libcrun_cgroup_killall (struct libcrun_cgroup_status *cgroup_status, int signal,
 int
 libcrun_cgroup_destroy (struct libcrun_cgroup_status *cgroup_status, libcrun_error_t *err)
 {
+  struct libcrun_cgroup_manager *cgroup_manager;
   int ret;
 
-  switch (cgroup_status->manager)
-    {
-    case CGROUP_MANAGER_DISABLED:
-      ret = libcrun_destroy_cgroup_disabled (cgroup_status, err);
-      break;
 
-    case CGROUP_MANAGER_SYSTEMD:
-      ret = libcrun_destroy_cgroup_systemd (cgroup_status, err);
-      break;
+  ret = get_cgroup_manager (cgroup_status->manager, &cgroup_manager, err);
+  if (UNLIKELY (ret < 0))
+    return ret;
 
-    case CGROUP_MANAGER_CGROUPFS:
-      ret = libcrun_destroy_cgroup_cgroupfs (cgroup_status, err);
-      break;
-
-    default:
-      return crun_make_error (err, EINVAL, "unknown cgroup manager specified %d", cgroup_status->manager);
-    }
-
+  ret = cgroup_manager->destroy_cgroup (cgroup_status, err);
   if (UNLIKELY (ret < 0))
     crun_error_release (err);
 
@@ -204,6 +221,7 @@ libcrun_cgroup_enter (struct libcrun_cgroup_args *args, struct libcrun_cgroup_st
 {
   __attribute__ ((unused)) pid_t sigcont_cleanup __attribute__ ((cleanup (cleanup_sig_contp))) = -1;
   cleanup_cgroup_status struct libcrun_cgroup_status *status;
+  struct libcrun_cgroup_manager *cgroup_manager;
   int manager = args->manager;
   uid_t root_uid = args->root_uid;
   uid_t root_gid = args->root_gid;
@@ -248,23 +266,11 @@ libcrun_cgroup_enter (struct libcrun_cgroup_args *args, struct libcrun_cgroup_st
         return crun_make_error (err, 0, "cgroups in hybrid mode not supported, drop all controllers from cgroupv2");
     }
 
-  switch (manager)
-    {
-    case CGROUP_MANAGER_DISABLED:
-      ret = libcrun_cgroup_enter_disabled (args, status, err);
-      break;
+  ret = get_cgroup_manager (manager, &cgroup_manager, err);
+  if (UNLIKELY (ret < 0))
+    return ret;
 
-    case CGROUP_MANAGER_SYSTEMD:
-      ret = libcrun_cgroup_enter_systemd (args, status, err);
-      break;
-
-    case CGROUP_MANAGER_CGROUPFS:
-      ret = libcrun_cgroup_enter_cgroupfs (args, status, err);
-      break;
-
-    default:
-      return crun_make_error (err, EINVAL, "unknown cgroup manager specified %d", manager);
-    }
+  ret = cgroup_manager->create_cgroup (args, status, err);
 
   if (LIKELY (ret >= 0))
     {

@@ -37,7 +37,7 @@
 #include <fcntl.h>
 #include <libgen.h>
 
-int
+static int
 libcrun_cgroup_enter_cgroupfs (struct libcrun_cgroup_args *args, struct libcrun_cgroup_status *out, libcrun_error_t *err)
 {
   cleanup_free char *target_cgroup_cleanup = NULL;
@@ -91,7 +91,7 @@ libcrun_cgroup_enter_cgroupfs (struct libcrun_cgroup_args *args, struct libcrun_
   return enter_cgroup (cgroup_mode, pid, 0, process_target_cgroup, true, err);
 }
 
-int
+static int
 libcrun_destroy_cgroup_cgroupfs (struct libcrun_cgroup_status *cgroup_status,
                                  libcrun_error_t *err)
 {
@@ -112,3 +112,9 @@ libcrun_destroy_cgroup_cgroupfs (struct libcrun_cgroup_status *cgroup_status,
 
   return 0;
 }
+
+struct libcrun_cgroup_manager cgroup_manager_cgroupfs =
+  {
+    .create_cgroup = libcrun_cgroup_enter_cgroupfs,
+    .destroy_cgroup = libcrun_destroy_cgroup_cgroupfs,
+  };
