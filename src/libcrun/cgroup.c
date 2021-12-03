@@ -344,14 +344,18 @@ libcrun_cgroup_enter (struct libcrun_cgroup_args *args, struct libcrun_cgroup_st
   if (LIKELY (ret >= 0))
     {
       bool need_chown = root_uid != (uid_t) -1 || root_gid != (gid_t) -1;
-      if (status->path && cgroup_mode == CGROUP_MODE_UNIFIED && need_chown)
+
+      if (status->path == NULL)
+        return crun_make_error(err, 0, "internal error: cgroup path not set");
+
+      if (cgroup_mode == CGROUP_MODE_UNIFIED && need_chown)
         {
           ret = chown_cgroups (status->path, root_uid, root_gid, err);
           if (UNLIKELY (ret < 0))
             return ret;
         }
 
-      if (args->resources && status->path)
+      if (args->resources)
         {
           ret = update_cgroup_resources (status->path, args->resources, err);
           if (UNLIKELY (ret < 0))
