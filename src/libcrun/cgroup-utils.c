@@ -23,6 +23,7 @@
 #include "cgroup-internal.h"
 #include "cgroup-systemd.h"
 #include "cgroup-utils.h"
+#include "cgroup-setup.h"
 #include "ebpf.h"
 #include "utils.h"
 #include "status.h"
@@ -816,4 +817,17 @@ enable_controllers (const char *path, libcrun_error_t *err)
       it = next_slash;
     }
   return 0;
+}
+
+int
+libcrun_move_process_to_cgroup (pid_t pid, pid_t init_pid, char *path, libcrun_error_t *err)
+{
+  int cgroup_mode = libcrun_get_cgroup_mode (err);
+  if (UNLIKELY (cgroup_mode < 0))
+    return cgroup_mode;
+
+  if (path == NULL || *path == '\0')
+    return 0;
+
+  return enter_cgroup (cgroup_mode, pid, init_pid, path, false, err);
 }

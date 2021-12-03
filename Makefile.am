@@ -25,6 +25,7 @@ libcrun_SOURCES = src/libcrun/utils.c \
 			src/libcrun/container.c \
 			src/libcrun/cgroup.c \
 			src/libcrun/cgroup-resources.c \
+			src/libcrun/cgroup-setup.c \
 			src/libcrun/cgroup-systemd.c \
 			src/libcrun/cgroup-utils.c \
 			src/libcrun/criu.c \
@@ -79,8 +80,8 @@ EXTRA_DIST = COPYING COPYING.libcrun README.md NEWS SECURITY.md rpm/crun.spec.in
 	src/checkpoint.h src/restore.h src/libcrun/seccomp_notify.h src/libcrun/seccomp_notify_plugin.h \
 	src/libcrun/container.h src/libcrun/seccomp.h src/libcrun/ebpf.h \
 	src/libcrun/cgroup.h src/libcrun/cgroup-internal.h \
-	src/libcrun/cgroup-resources.h src/libcrun/cgroup-systemd.h \
-	src/libcrun/cgroup-utils.h \
+	src/libcrun/cgroup-resources.h src/libcrun/cgroup-setup.h \
+	src/libcrun/cgroup-systemd.h src/libcrun/cgroup-utils.h \
 	src/libcrun/linux.h src/libcrun/utils.h src/libcrun/error.h src/libcrun/criu.h \
 	src/libcrun/status.h src/libcrun/terminal.h src/libcrun/mount_flags.h \
 	src/libcrun/intprops.h crun.1.md crun.1 libcrun.lds
