@@ -21,6 +21,16 @@
 #include "container.h"
 #include "utils.h"
 
+enum
+{
+  CGROUP_MEMORY = 1 << 0,
+  CGROUP_CPU = 1 << 1,
+  CGROUP_HUGETLB = 1 << 2,
+  CGROUP_CPUSET = 1 << 3,
+  CGROUP_PIDS = 1 << 4,
+  CGROUP_IO = 1 << 5,
+};
+
 struct libcrun_cgroup_status
 {
   char *path;
@@ -50,5 +60,7 @@ is_rootless (libcrun_error_t *err)
 
   return check_running_in_user_namespace (err);
 }
+
+int libcrun_cgroup_pause_unpause_path (const char *cgroup_path, const bool pause, libcrun_error_t *err);
 
 #endif

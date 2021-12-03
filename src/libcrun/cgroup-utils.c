@@ -518,3 +518,302 @@ chown_cgroups (const char *path, uid_t uid, gid_t gid, libcrun_error_t *err)
 
   return 0;
 }
+
+static int
+libcrun_cgroup_pause_unpause_with_mode (const char *cgroup_path, int cgroup_mode, const bool pause,
+                                        libcrun_error_t *err)
+{
+  cleanup_free char *path = NULL;
+  const char *state = "";
+  int ret;
+
+  if (cgroup_path == NULL || cgroup_path[0] == '\0')
+    return crun_make_error (err, 0, "cannot %s the container without a cgroup", pause ? "pause" : "resume");
+
+  if (cgroup_mode == CGROUP_MODE_UNIFIED)
+    {
+      state = pause ? "1" : "0";
+      ret = append_paths (&path, err, CGROUP_ROOT, cgroup_path, "cgroup.freeze", NULL);
+      if (UNLIKELY (ret < 0))
+        return ret;
+    }
+  else
+    {
+      state = pause ? "FROZEN" : "THAWED";
+      ret = append_paths (&path, err, CGROUP_ROOT "/freezer", cgroup_path, "freezer.state", NULL);
+      if (UNLIKELY (ret < 0))
+        return ret;
+    }
+
+  ret = write_file (path, state, strlen (state), err);
+  if (ret >= 0)
+    return 0;
+  return ret;
+}
+
+int
+libcrun_cgroup_pause_unpause_path (const char *cgroup_path, const bool pause, libcrun_error_t *err)
+{
+  int cgroup_mode;
+
+  cgroup_mode = libcrun_get_cgroup_mode (err);
+  if (UNLIKELY (cgroup_mode < 0))
+    return cgroup_mode;
+
+  return libcrun_cgroup_pause_unpause_with_mode (cgroup_path, cgroup_mode, pause, err);
+}
+
+int
+cgroup_killall_path (const char *path, int signal, libcrun_error_t *err)
+{
+  int ret;
+  size_t i;
+  cleanup_free pid_t *pids = NULL;
+
+  if (path == NULL || *path == '\0')
+    return 0;
+
+  /* If the signal is SIGKILL, try to kill each process using the `cgroup.kill` file.  */
+  if (signal == SIGKILL)
+    {
+      cleanup_free char *kill_file = NULL;
+
+      ret = append_paths (&kill_file, err, CGROUP_ROOT, path, "cgroup.kill", NULL);
+      if (UNLIKELY (ret < 0))
+        return ret;
+
+      ret = write_file_with_flags (kill_file, 0, "1", 1, err);
+      if (ret >= 0)
+        return 0;
+
+      crun_error_release (err);
+    }
+
+  ret = libcrun_cgroup_pause_unpause_path (path, true, err);
+  if (UNLIKELY (ret < 0))
+    crun_error_release (err);
+
+  ret = libcrun_cgroup_read_pids_from_path (path, true, &pids, err);
+  if (UNLIKELY (ret < 0))
+    {
+      if (crun_error_get_errno (err) != ENOENT)
+        return ret;
+
+      /* If the file doesn't exist then the container was already killed.  */
+      crun_error_release (err);
+    }
+
+  for (i = 0; pids && pids[i]; i++)
+    {
+      ret = kill (pids[i], signal);
+      if (UNLIKELY (ret < 0 && errno != ESRCH))
+        return crun_make_error (err, errno, "kill process %d", pids[i]);
+    }
+
+  ret = libcrun_cgroup_pause_unpause_path (path, false, err);
+  if (UNLIKELY (ret < 0))
+    crun_error_release (err);
+
+  return 0;
+}
+
+static int
+read_available_controllers (const char *path, libcrun_error_t *err)
+{
+  cleanup_close int fd;
+  char *saveptr = NULL;
+  const char *token;
+  char *controllers;
+  int available = 0;
+  char buf[256];
+  ssize_t ret;
+
+  xasprintf (&controllers, "%s/cgroup.controllers", path);
+
+  fd = TEMP_FAILURE_RETRY (open (controllers, O_RDONLY | O_CLOEXEC));
+  if (UNLIKELY (fd < 0))
+    return crun_make_error (err, errno, "error opening file `%s`", path);
+
+  ret = TEMP_FAILURE_RETRY (read (fd, buf, sizeof (buf) - 1));
+  if (UNLIKELY (ret < 0))
+    return crun_make_error (err, errno, "error reading from file `%s`", path);
+  buf[ret] = '\0';
+
+  for (token = strtok_r (buf, " \n", &saveptr); token; token = strtok_r (NULL, " \n", &saveptr))
+    {
+      if (strcmp (token, "memory") == 0)
+        available |= CGROUP_MEMORY;
+      else if (strcmp (token, "cpu") == 0)
+        available |= CGROUP_CPU;
+      else if (strcmp (token, "cpuset") == 0)
+        available |= CGROUP_CPUSET;
+      else if (strcmp (token, "hugetlb") == 0)
+        available |= CGROUP_HUGETLB;
+      else if (strcmp (token, "pids") == 0)
+        available |= CGROUP_PIDS;
+      else if (strcmp (token, "io") == 0)
+        available |= CGROUP_IO;
+    }
+  return available;
+}
+
+static int
+write_controller_file (const char *path, int controllers_to_enable, libcrun_error_t *err)
+{
+  cleanup_free char *subtree_control = NULL;
+  cleanup_free char *controllers = NULL;
+  size_t controllers_len = 0;
+  int ret;
+
+  controllers_len = xasprintf (
+      &controllers, "%s %s %s %s %s %s", (controllers_to_enable & CGROUP_CPU) ? "+cpu" : "",
+      (controllers_to_enable & CGROUP_IO) ? "+io" : "", (controllers_to_enable & CGROUP_MEMORY) ? "+memory" : "",
+      (controllers_to_enable & CGROUP_PIDS) ? "+pids" : "", (controllers_to_enable & CGROUP_CPUSET) ? "+cpuset" : "",
+      (controllers_to_enable & CGROUP_HUGETLB) ? "+hugetlb" : "");
+
+  xasprintf (&subtree_control, "%s/cgroup.subtree_control", path);
+  ret = write_file (subtree_control, controllers, controllers_len, err);
+  if (UNLIKELY (ret < 0))
+    {
+      cleanup_free char *controllers_copy = xmalloc (controllers_len + 1);
+      int attempts_left;
+      char *saveptr = NULL;
+      const char *token;
+      int e;
+
+      e = crun_error_get_errno (err);
+      if (e != EPERM && e != EACCES && e != EBUSY && e != ENOENT)
+        return ret;
+
+      /* ENOENT can mean both that the file doesn't exist or the controller is not present.  */
+      if (e == ENOENT)
+        {
+          libcrun_error_t tmp_err = NULL;
+          int exists;
+
+          exists = crun_path_exists (subtree_control, &tmp_err);
+          if (UNLIKELY (exists < 0))
+            {
+              crun_error_release (&tmp_err);
+              return ret;
+            }
+          /* If the file doesn't exist, then return the original ENOENT.  */
+          if (exists == 0)
+            return ret;
+        }
+
+      crun_error_release (err);
+
+      /* It seems the kernel can return EBUSY when a process was moved to a sub-cgroup
+         and the controllers are enabled in its parent cgroup.  Retry a few times when
+         it happens.  */
+      for (attempts_left = 1000; attempts_left >= 0; attempts_left--)
+        {
+          int controllers_written;
+          bool repeat = false;
+
+          memcpy (controllers_copy, controllers, controllers_len);
+          controllers_copy[controllers_len] = '\0';
+          controllers_written = 0;
+
+          /* Fallback to write each one individually.  */
+          for (token = strtok_r (controllers_copy, " ", &saveptr); token; token = strtok_r (NULL, " ", &saveptr))
+            {
+              ret = write_file (subtree_control, token, strlen (token), err);
+              if (ret < 0)
+                {
+                  if (crun_error_get_errno (err) == EBUSY)
+                    repeat = true;
+                  crun_error_release (err);
+
+                  continue;
+                }
+
+              controllers_written++;
+            }
+
+          if (! repeat)
+            break;
+
+          /* If there was any controller written, just try once more without any delay.  */
+          if (controllers_written > 0 && attempts_left > 2)
+            {
+              attempts_left = 1;
+              continue;
+            }
+
+          if (attempts_left > 0)
+            {
+              struct timespec delay = {
+                .tv_sec = 0,
+                .tv_nsec = 1000000,
+              };
+              nanosleep (&delay, NULL);
+            }
+        }
+
+      /* Refresh what controllers are available.  */
+      return read_available_controllers (path, err);
+    }
+
+  /* All controllers were enabled successfully.  */
+  return controllers_to_enable;
+}
+
+int
+enable_controllers (const char *path, libcrun_error_t *err)
+{
+  cleanup_free char *tmp_path = NULL;
+  char *it;
+  int ret, controllers_to_enable;
+
+  xasprintf (&tmp_path, "%s/", path);
+
+  ret = read_available_controllers (CGROUP_ROOT, err);
+  if (UNLIKELY (ret < 0))
+    return ret;
+
+  controllers_to_enable = ret;
+
+  /* Enable all possible controllers in the root cgroup.  */
+  ret = write_controller_file (CGROUP_ROOT, controllers_to_enable, err);
+  if (UNLIKELY (ret < 0))
+    {
+      /* Enabling +cpu when there are realtime processes fail with EINVAL.  */
+      if ((controllers_to_enable & CGROUP_CPU) && (crun_error_get_errno (err) == EINVAL))
+        {
+          crun_error_release (err);
+          controllers_to_enable &= ~CGROUP_CPU;
+          ret = write_controller_file (CGROUP_ROOT, controllers_to_enable, err);
+        }
+      if (UNLIKELY (ret < 0))
+        return ret;
+    }
+
+  for (it = strchr (tmp_path + 1, '/'); it;)
+    {
+      cleanup_free char *cgroup_path = NULL;
+      char *next_slash = strchr (it + 1, '/');
+
+      *it = '\0';
+
+      ret = append_paths (&cgroup_path, err, CGROUP_ROOT, tmp_path, NULL);
+      if (UNLIKELY (ret < 0))
+        return ret;
+
+      ret = mkdir (cgroup_path, 0755);
+      if (UNLIKELY (ret < 0 && errno != EEXIST))
+        return crun_make_error (err, errno, "create `%s`", cgroup_path);
+
+      if (next_slash)
+        {
+          ret = write_controller_file (cgroup_path, controllers_to_enable, err);
+          if (UNLIKELY (ret < 0))
+            return ret;
+        }
+
+      *it = '/';
+      it = next_slash;
+    }
+  return 0;
+}
