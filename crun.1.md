@@ -563,7 +563,7 @@ For each triplet, the first value is the start of the backing
 file system IDs that are mapped to the second value on the host.  The
 length of this mapping is given in the third value.
 
-Multiple ranges are separed with `#`.
+Multiple ranges are separated with `#`.
 
 These values are written to the `/proc/$PID/uid_map` and
 `/proc/$PID/gid_map` files to create the user namespace for the
