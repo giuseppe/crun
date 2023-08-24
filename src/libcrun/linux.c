@@ -4121,7 +4121,7 @@ restore_mountns:
 
     setns_ret = setns (current_mountns, CLONE_NEWNS);
     if (UNLIKELY (setns_ret < 0 && ret >= 0))
-      crun_make_error (err, errno, "setns `CLONE_NEWNS`");
+      return crun_make_error (err, errno, "setns `CLONE_NEWNS`");
   }
   return ret;
 }
@@ -4913,7 +4913,7 @@ join_process_namespaces (libcrun_container_t *container, pid_t pid_to_join, libc
           if (errno == ENOENT)
             continue;
 
-          crun_make_error (err, errno, "open `%s`", ns_join);
+          ret = crun_make_error (err, errno, "open `%s`", ns_join);
           goto exit;
         }
     }
@@ -5044,7 +5044,7 @@ libcrun_join_process (libcrun_container_t *container, pid_t pid_to_join,
       pid = fork ();
       if (UNLIKELY (pid < 0))
         {
-          crun_make_error (err, errno, "fork");
+          ret = crun_make_error (err, errno, "fork");
           goto exit;
         }
     }
@@ -5065,21 +5065,25 @@ libcrun_join_process (libcrun_container_t *container, pid_t pid_to_join,
 
   ret = join_process_namespaces (container, pid_to_join, status, err);
   if (UNLIKELY (ret < 0))
-    goto exit;
+    {
+      TEMP_FAILURE_RETRY (write (sync_fd, "1", 1));
+      libcrun_fail_with_error ((*err)->status, "%s", (*err)->msg);
+    }
 
   if (setsid () < 0)
     {
-      crun_make_error (err, errno, "setsid");
-      goto exit;
+      int saved_errno = errno;
+      TEMP_FAILURE_RETRY (write (sync_fd, "1", 1));
+      libcrun_fail_with_error (saved_errno, "setsid");
     }
 
   /* We need to fork once again to join the PID namespace.  */
   pid = fork ();
   if (UNLIKELY (pid < 0))
     {
-      ret = TEMP_FAILURE_RETRY (write (sync_fd, "1", 1));
-      crun_make_error (err, errno, "fork");
-      goto exit;
+      int saved_errno = errno;
+      TEMP_FAILURE_RETRY (write (sync_fd, "1", 1));
+      libcrun_fail_with_error (saved_errno, "setsid");
     }
 
   if (pid)
@@ -5087,11 +5091,17 @@ libcrun_join_process (libcrun_container_t *container, pid_t pid_to_join,
       /* Just return the PID to the parent helper and exit.  */
       ret = TEMP_FAILURE_RETRY (write (sync_fd, "0", 1));
       if (UNLIKELY (ret < 0))
-        _exit (EXIT_FAILURE);
+        {
+          kill (pid, SIGKILL);
+          _exit (EXIT_FAILURE);
+        }
 
       ret = TEMP_FAILURE_RETRY (write (sync_fd, &pid, sizeof (pid)));
       if (UNLIKELY (ret < 0))
-        _exit (EXIT_FAILURE);
+        {
+          kill (pid, SIGKILL);
+          _exit (EXIT_FAILURE);
+        }
 
       _exit (EXIT_SUCCESS);
     }
@@ -5134,7 +5144,7 @@ libcrun_join_process (libcrun_container_t *container, pid_t pid_to_join,
         _exit (EXIT_FAILURE);
     }
 
-  return pid;
+  return 0;
 
 exit:
   if (sync_socket_fd[0] >= 0)

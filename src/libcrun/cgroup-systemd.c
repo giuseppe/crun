@@ -302,7 +302,7 @@ systemd_job_removed (sd_bus_message *m, void *userdata, sd_bus_error *error arg_
     {
       d->terminated = 1;
       if (strcmp (result, "done") != 0)
-        crun_make_error (&d->err, 0, "error `%s` systemd unit `%s`: got `%s`", d->op, unit, result);
+        return crun_make_error (&d->err, 0, "error `%s` systemd unit `%s`: got `%s`", d->op, unit, result);
     }
   return 0;
 }
