@@ -79,6 +79,7 @@ struct libcriu_wrapper_s
   void (*criu_set_leave_running) (bool leave_running);
   void (*criu_set_manage_cgroups) (bool manage);
   void (*criu_set_manage_cgroups_mode) (enum criu_cg_mode mode);
+  void (*criu_set_network_lock) (enum criu_network_lock_method method);
   void (*criu_set_notify_cb) (int (*cb) (char *action, criu_notify_arg_t na));
   void (*criu_set_orphan_pts_master) (bool orphan_pts_master);
   void (*criu_set_images_dir_fd) (int fd);
@@ -163,6 +164,7 @@ load_wrapper (struct libcriu_wrapper_s **wrapper_out, libcrun_error_t *err)
   LOAD_CRIU_FUNCTION (criu_set_log_level, false);
   LOAD_CRIU_FUNCTION (criu_set_manage_cgroups, false);
   LOAD_CRIU_FUNCTION (criu_set_manage_cgroups_mode, false);
+  LOAD_CRIU_FUNCTION (criu_set_network_lock, true);
   LOAD_CRIU_FUNCTION (criu_set_notify_cb, false);
   LOAD_CRIU_FUNCTION (criu_set_orphan_pts_master, false);
   LOAD_CRIU_FUNCTION (criu_set_parent_images, false);
@@ -645,6 +647,9 @@ libcrun_container_checkpoint_linux_criu (libcrun_container_status_t *status, lib
     libcriu_wrapper->criu_set_manage_cgroups_mode (cr_options->manage_cgroups_mode);
   libcriu_wrapper->criu_set_manage_cgroups (true);
 
+  if (libcriu_wrapper->criu_set_network_lock)
+    libcriu_wrapper->criu_set_network_lock (cr_options->network_lock_method);
+
   ret = libcriu_wrapper->criu_dump ();
   if (UNLIKELY (ret != 0))
     return crun_make_error (err, 0,
@@ -979,6 +984,7 @@ libcrun_container_restore_linux_criu (libcrun_container_status_t *status, libcru
   libcriu_wrapper->criu_set_file_locks (cr_options->file_locks);
   libcriu_wrapper->criu_set_orphan_pts_master (true);
   libcriu_wrapper->criu_set_manage_cgroups (true);
+  libcriu_wrapper->criu_set_network_lock (cr_options->network_lock_method);
 
   libcriu_wrapper->criu_set_log_level (4);
   libcriu_wrapper->criu_set_log_file (CRIU_RESTORE_LOG_FILE);

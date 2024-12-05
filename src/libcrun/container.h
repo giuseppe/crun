@@ -187,6 +187,7 @@ struct libcrun_checkpoint_restore_s
   char *parent_path;
   bool pre_dump;
   int manage_cgroups_mode;
+  int network_lock_method;
   char *lsm_profile;
   char *lsm_mount_context;
 };
