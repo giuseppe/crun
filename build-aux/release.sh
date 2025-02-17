@@ -5,6 +5,7 @@ set -xeuo pipefail
 SKIP_GPG=${SKIP_GPG:-}
 SKIP_CHECKS=${SKIP_CHECKS:-}
 
+NIX_CACHE=${NIX_CACHE:-/nix}
 NIX_IMAGE=${NIX_IMAGE:-nixos/nix:2.24.9}
 
 test -e Makefile && make distclean
@@ -46,15 +47,15 @@ mkdir -p /nix
 NIX_ARGS="--extra-experimental-features nix-command --print-build-logs --option cores $(nproc) --option max-jobs $(nproc)"
 
 for ARCH in amd64 arm64 ppc64le riscv64 s390x; do
-    $RUNTIME run --init --rm $RUNTIME_EXTRA_ARGS --privileged -v /nix:/nix -v ${PWD}:${PWD} -w ${PWD} ${NIX_IMAGE} \
-        nix $NIX_ARGS build --max-jobs auto --file nix/default-${ARCH}.nix
-    cp ./result/bin/crun $OUTDIR/crun-$VERSION-linux-${ARCH}
+    $RUNTIME run --init --rm $RUNTIME_EXTRA_ARGS --privileged -v ${NIX_CACHE}:/nix -v ${PWD}:${PWD} -w ${PWD} ${NIX_IMAGE} \
+             nix $NIX_ARGS build --max-jobs auto --file nix/default-${ARCH}.nix
+    unshare -m bash -c "test -e /nix || mkdir /nix; mount --bind $NIX_CACHE /nix; ls /nix; cp ./result/bin/crun $OUTDIR/crun-$VERSION-linux-${ARCH}"
 
     rm -rf result
 
-    $RUNTIME run --init --rm $RUNTIME_EXTRA_ARGS --privileged -v /nix:/nix -v ${PWD}:${PWD} -w ${PWD} ${NIX_IMAGE} \
+    $RUNTIME run --init --rm $RUNTIME_EXTRA_ARGS --privileged -v ${NIX_CACHE}:/nix -v ${PWD}:${PWD} -w ${PWD} ${NIX_IMAGE} \
         nix $NIX_ARGS build --max-jobs auto --file nix/default-${ARCH}.nix --arg enableSystemd false
-    cp ./result/bin/crun $OUTDIR/crun-$VERSION-linux-${ARCH}-disable-systemd
+    unshare -m bash -c "test -e /nix || mkdir /nix; mount --bind $NIX_CACHE /nix; ls /nix; cp ./result/bin/crun $OUTDIR/crun-$VERSION-linux-${ARCH}-disable-systemd"
 
     rm -rf result
 done
