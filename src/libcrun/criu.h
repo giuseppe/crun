@@ -30,7 +30,8 @@ int libcrun_container_checkpoint_linux_criu (libcrun_container_status_t *status,
                                              libcrun_checkpoint_restore_t *cr_options, libcrun_error_t *err);
 
 int libcrun_container_restore_linux_criu (libcrun_container_status_t *status, libcrun_container_t *container,
-                                          libcrun_checkpoint_restore_t *cr_options, libcrun_error_t *err);
+                                          libcrun_checkpoint_restore_t *cr_options, unsigned int options,
+                                          libcrun_error_t *err);
 
 #else
 
@@ -45,7 +46,8 @@ libcrun_container_checkpoint_linux_criu (arg_unused libcrun_container_status_t *
 static inline int
 libcrun_container_restore_linux_criu (arg_unused libcrun_container_status_t *status,
                                       arg_unused libcrun_container_t *container,
-                                      arg_unused libcrun_checkpoint_restore_t *cr_options, libcrun_error_t *err)
+                                      arg_unused libcrun_checkpoint_restore_t *cr_options,
+                                      arg_unused unsigned int options, libcrun_error_t *err)
 {
   return crun_make_error (err, 0, "compiled without CRIU support. Restore not available");
 }

@@ -4303,7 +4303,7 @@ restore_proxy_process (int *proxy_pid_pipe, int cgroup_manager, libcrun_error_t 
 
 int
 libcrun_container_restore (libcrun_context_t *context, const char *id, libcrun_checkpoint_restore_t *cr_options,
-                           libcrun_error_t *err)
+                           unsigned int options, libcrun_error_t *err)
 {
   cleanup_cgroup_status struct libcrun_cgroup_status *cgroup_status = NULL;
   cleanup_container libcrun_container_t *container = NULL;
@@ -4317,6 +4317,19 @@ libcrun_container_restore (libcrun_context_t *context, const char *id, libcrun_c
   uid_t root_uid = -1;
   gid_t root_gid = -1;
   int ret;
+
+  ret = validate_options (options, LIBCRUN_RESTORE_OPTIONS_PREFORK, err);
+  if (UNLIKELY (ret < 0))
+    return ret;
+
+  /* CRIU restores the container as a child of the process driving it, which
+     must also join the container cgroup for the time of the restore.  Without
+     LIBCRUN_RESTORE_OPTIONS_PREFORK the calling process can be taken over and
+     do that itself, the way `crun restore` does; with it, a throw-away process
+     is used instead, and as that process cannot stay around to wait for the
+     container, `detach` is required.  */
+  if ((options & LIBCRUN_RESTORE_OPTIONS_PREFORK) && ! cr_options->detach)
+    return crun_make_error (err, EINVAL, "`detach` is required with `LIBCRUN_RESTORE_OPTIONS_PREFORK`");
 
   container = libcrun_container_load_from_file ("config.json", err);
   if (container == NULL)
@@ -4396,7 +4409,7 @@ libcrun_container_restore (libcrun_context_t *context, const char *id, libcrun_c
         /* Restore the container directly in the desired cgroup.  */
         status.cgroup_path = cgroup_path;
 
-        ret = libcrun_container_restore_linux (&status, container, cr_options, err);
+        ret = libcrun_container_restore_linux (&status, container, cr_options, options, err);
         if (UNLIKELY (ret < 0))
           return ret;
 
@@ -4475,7 +4488,7 @@ libcrun_container_restore (libcrun_context_t *context, const char *id, libcrun_c
         /* Restore the container in the same cgroup where the dummy process was.  */
         status.cgroup_path = target_cgroup;
 
-        ret = libcrun_container_restore_linux (&status, container, cr_options, err);
+        ret = libcrun_container_restore_linux (&status, container, cr_options, options, err);
         if (UNLIKELY (ret < 0))
           return ret;
 

@@ -7118,10 +7118,10 @@ libcrun_container_checkpoint_linux (libcrun_container_status_t *status, libcrun_
 
 int
 libcrun_container_restore_linux (libcrun_container_status_t *status, libcrun_container_t *container,
-                                 libcrun_checkpoint_restore_t *cr_options, libcrun_error_t *err)
+                                 libcrun_checkpoint_restore_t *cr_options, unsigned int options, libcrun_error_t *err)
 {
   int ret;
-  ret = libcrun_container_restore_linux_criu (status, container, cr_options, err);
+  ret = libcrun_container_restore_linux_criu (status, container, cr_options, options, err);
   if (UNLIKELY (ret < 0))
     return ret;
 

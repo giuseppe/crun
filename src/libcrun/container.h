@@ -76,6 +76,18 @@ enum
   LIBCRUN_CREATE_OPTIONS_PREFORK = 1 << 0,
 };
 
+enum
+{
+  /* Do not take over the calling process: restore the container from a
+     throw-away process instead.  It requires `detach`, as the throw-away
+     process cannot stay around to wait for the container.
+
+     The restored container is not a child of the calling process, unless it
+     is a subreaper or pid 1 and so adopts it, as it would any other detached
+     container.  */
+  LIBCRUN_RESTORE_OPTIONS_PREFORK = 1 << 0,
+};
+
 struct libcrun_container_s
 {
   /* Container parsed from the runtime json file.  */
@@ -306,7 +318,8 @@ LIBCRUN_PUBLIC int libcrun_container_checkpoint (libcrun_context_t *context, con
                                                  libcrun_checkpoint_restore_t *cr_options, libcrun_error_t *err);
 
 LIBCRUN_PUBLIC int libcrun_container_restore (libcrun_context_t *context, const char *id,
-                                              libcrun_checkpoint_restore_t *cr_options, libcrun_error_t *err);
+                                              libcrun_checkpoint_restore_t *cr_options, unsigned int options,
+                                              libcrun_error_t *err);
 
 LIBCRUN_PUBLIC int libcrun_container_read_pids (libcrun_context_t *context, const char *id, bool recurse, pid_t **pids, libcrun_error_t *err);
 

@@ -213,5 +213,5 @@ crun_command_restore (struct crun_global_arguments *global_args, int argc, char 
     }
 
   crun_context.bundle = bundle;
-  return libcrun_container_restore (&crun_context, argv[first_arg], &cr_options, err);
+  return libcrun_container_restore (&crun_context, argv[first_arg], &cr_options, 0, err);
 }
